@@ -22,7 +22,14 @@ from .config import Settings
 from .llm import LLMClient
 from .protocol import Protocol, build_protocol
 from .tasks import extract_tasks
-from .transcribe import Backend, recognize
+from .transcribe import (
+    STEP_TITLES,
+    Backend,
+    Progress,
+    Step,
+    recognize,
+    report,
+)
 
 #: Расширения, которые считаем видео: из них сперва извлекается звук.
 VIDEO_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v"}
@@ -55,18 +62,27 @@ def transcribe_meeting(
     backend: Backend | None = None,
     work_dir: str | Path | None = None,
     diarize: bool = True,
+    progress: Progress | None = None,
 ) -> Transcript:
-    """Из записи — стенограмма. Самый долгий шаг, и единственный с видеокартой."""
+    """Из записи — стенограмма. Самый долгий шаг, и единственный с видеокартой.
+
+    :param progress: куда сообщать о ходе работы: часовая запись считается
+        десятки минут, и человеку нужно видеть, что она считается.
+    """
     settings = settings or Settings()
     source = Path(source)
     work_dir = Path(work_dir) if work_dir else source.parent
 
     audio = source
     if source.suffix.lower() in VIDEO_SUFFIXES:
+        title = STEP_TITLES["audio"]
+        report(progress, Step(name="audio", title=title, share=0.0))
         audio = extract_audio(source, work_dir / f"{source.stem}.wav")
+        report(progress, Step(name="audio", title=title, done=True, share=0.05))
 
     recognition = recognize(
-        audio, settings, backend=backend, cache_dir=work_dir, diarize=diarize
+        audio, settings, backend=backend, cache_dir=work_dir,
+        diarize=diarize, progress=progress,
     )
     blocks = consolidate(blocks_from_segments(recognition.segments))
     logger.info(

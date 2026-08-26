@@ -146,3 +146,25 @@ def test_missing_token_exits_without_a_traceback(tmp_path, monkeypatch, capsys):
 
     assert main(["recognize", str(source), "--out", str(tmp_path)]) == 2
     assert "нужен токен" in capsys.readouterr().err
+
+
+def test_recognize_prints_progress(tmp_path, monkeypatch, capsys):
+    """В терминале ход работы — единственный признак жизни: распознавание
+    часовой записи идёт десятки минут молча."""
+    from protocall.transcribe import Step
+
+    def fake(source, settings=None, *, progress=None, **kwargs):
+        progress(Step(name="transcribe", title="Распознаю речь", share=0.05))
+        progress(Step(
+            name="transcribe", title="Распознаю речь", done=True, elapsed_s=12.3, share=0.65
+        ))
+        return Transcript([Block("SPEAKER_00", "Раз.", 0, 5)])
+
+    monkeypatch.setattr("protocall.cli.transcribe_meeting", fake)
+    source = tmp_path / "meeting.mp4"
+    source.write_bytes(b"video")
+
+    main(["recognize", str(source), "--out", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert "Распознаю речь — 12.3 с" in out
+    assert "65%" in out

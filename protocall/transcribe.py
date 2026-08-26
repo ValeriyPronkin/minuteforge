@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
@@ -58,6 +59,50 @@ class Backend(Protocol):
     ) -> dict: ...
 
 
+#: Сколько времени занимает каждый шаг — доли от общего, по наблюдениям.
+#: Точность тут недостижима: она зависит от записи, модели и видеокарты.
+#: Но даже грубая шкала честнее крутилки, по которой не понять, идёт работа
+#: или всё повисло.
+STEP_SHARES = {"audio": 0.05, "transcribe": 0.60, "align": 0.15, "diarize": 0.20}
+
+STEP_TITLES = {
+    "audio": "Извлекаю звук",
+    "transcribe": "Распознаю речь",
+    "align": "Выравниваю по времени",
+    "diarize": "Разделяю по говорящим",
+}
+
+
+@dataclass
+class Step:
+    """Событие о ходе работы."""
+
+    name: str
+    #: Человеческое название — то, что видит человек.
+    title: str
+    #: Шаг закончен. До этого приходит событие о начале.
+    done: bool = False
+    #: Шаг не считался, а взят из сохранённого.
+    reused: bool = False
+    elapsed_s: float = 0.0
+    #: Доля выполненного, от 0 до 1.
+    share: float = 0.0
+
+
+#: Кому сообщать о ходе работы.
+Progress = Callable[[Step], None]
+
+
+def report(progress: Progress | None, step: Step) -> None:
+    """Сообщает о шаге, не роняя расчёт из-за ошибки в показе прогресса."""
+    if progress is None:
+        return
+    try:
+        progress(step)
+    except Exception as exc:  # рисование не должно ломать работу
+        logger.warning("Ошибка при показе прогресса: {}", exc)
+
+
 @dataclass
 class Recognition:
     """Итог распознавания."""
@@ -96,6 +141,7 @@ def recognize(
     backend: Backend | None = None,
     cache_dir: str | Path | None = None,
     diarize: bool = True,
+    progress: Progress | None = None,
 ) -> Recognition:
     """Распознаёт запись и размечает её по говорящим.
 
@@ -104,6 +150,8 @@ def recognize(
     :param diarize: делить ли по говорящим. Без разделения протокол выйдет
         сплошным текстом без авторов, но зато не нужен токен HuggingFace —
         годится, чтобы посмотреть, как вообще распознаётся запись.
+    :param progress: куда сообщать о ходе работы. Часовая запись считается
+        десятки минут, и человеку нужно видеть, что происходит.
     """
     settings = settings or Settings()
     audio = Path(audio)
@@ -139,7 +187,7 @@ def recognize(
 
     logger.info("Распознавание: модель {}, устройство {}", settings.asr_model, device)
     raw = _step(
-        cache, "transcription.json", result,
+        cache, "transcription.json", result, progress, "transcribe",
         lambda: backend.transcribe(
             str(audio),
             model=settings.asr_model,
@@ -151,7 +199,7 @@ def recognize(
     result.language = raw.get("language") or settings.language
 
     aligned = _step(
-        cache, "aligned.json", result,
+        cache, "aligned.json", result, progress, "align",
         lambda: backend.align(
             raw.get("segments", []),
             language=result.language,
@@ -165,7 +213,7 @@ def recognize(
         return result
 
     assigned = _step(
-        cache, "segments.json", result,
+        cache, "segments.json", result, progress, "diarize",
         lambda: backend.diarize(
             str(audio),
             aligned,
@@ -179,23 +227,61 @@ def recognize(
     return result
 
 
-def _step(cache: Path | None, name: str, result: Recognition, work) -> dict:
-    """Считает шаг или берёт готовый с диска."""
+def _step(
+    cache: Path | None,
+    name: str,
+    result: Recognition,
+    progress: Progress | None,
+    key: str,
+    work,
+) -> dict:
+    """Считает шаг или берёт готовый с диска, сообщая о ходе работы."""
+    title = STEP_TITLES.get(key, key)
+    report(progress, Step(name=key, title=title, share=_share_before(key)))
+
+    started = time.perf_counter()
+    reused = False
+    value = None
+
     if cache is not None:
         cache.mkdir(parents=True, exist_ok=True)
         path = cache / name
         if path.exists():
             logger.info("Шаг {} взят из {}", name, path)
             result.reused.append(name)
-            return json.loads(path.read_text(encoding="utf-8"))
+            value = json.loads(path.read_text(encoding="utf-8"))
+            reused = True
 
-    value = work()
+    if value is None:
+        value = work()
+        if cache is not None:
+            (cache / name).write_text(
+                json.dumps(value, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+            )
 
-    if cache is not None:
-        (cache / name).write_text(
-            json.dumps(value, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
-        )
+    report(progress, Step(
+        name=key,
+        title=title,
+        done=True,
+        reused=reused,
+        elapsed_s=round(time.perf_counter() - started, 1),
+        share=_share_after(key),
+    ))
     return value
+
+
+def _share_before(key: str) -> float:
+    """Сколько сделано к началу шага."""
+    total = 0.0
+    for name, share in STEP_SHARES.items():
+        if name == key:
+            break
+        total += share
+    return round(total, 3)
+
+
+def _share_after(key: str) -> float:
+    return round(min(1.0, _share_before(key) + STEP_SHARES.get(key, 0.0)), 3)
 
 
 def _cuda_available() -> bool:

@@ -176,9 +176,25 @@ if uploaded is not None:
         WORK_DIR.mkdir(parents=True, exist_ok=True)
         source = WORK_DIR / uploaded.name
         source.write_bytes(uploaded.getbuffer())
+        # Полоска по шагам, а не крутилка: на часовой записи человек иначе
+        # сидит и гадает, идёт работа или всё повисло. Точной шкалы тут быть
+        # не может — WhisperX не сообщает, сколько минут записи он прошёл, —
+        # но видеть, какой шаг идёт и сколько занял предыдущий, уже достаточно.
+        bar = st.progress(0.0, text="Готовлюсь…")
+        done_steps: list[str] = []
+
+        def show(step) -> None:
+            if step.done:
+                mark = "взят готовым" if step.reused else f"{step.elapsed_s} с"
+                done_steps.append(f"{step.title} — {mark}")
+            text = " · ".join([*done_steps, f"**{step.title}…**"]) if not step.done else " · ".join(done_steps)
+            bar.progress(step.share, text=text or step.title)
+
         try:
-            with st.spinner("Распознаю. На часовой записи это надолго…"):
-                transcript = transcribe_meeting(source, settings, work_dir=WORK_DIR)
+            transcript = transcribe_meeting(
+                source, settings, work_dir=WORK_DIR, progress=show
+            )
+            bar.progress(1.0, text=" · ".join(done_steps) or "Готово")
             st.session_state["segments"] = [
                 {"speaker": b.speaker, "text": b.text, "start": b.start, "end": b.end}
                 for b in transcript.blocks

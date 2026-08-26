@@ -163,11 +163,21 @@ def command_check(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def print_step(step) -> None:
+    """Ход работы строчками. В терминале это единственный признак жизни:
+    распознавание часовой записи идёт десятки минут молча."""
+    if not step.done:
+        return
+    mark = "взят готовым" if step.reused else f"{step.elapsed_s} с"
+    print(f"  [{step.share:>4.0%}] {step.title} — {mark}", flush=True)
+
+
 def command_recognize(args: argparse.Namespace) -> int:
     settings = settings_from(args)
     work_dir = args.out or args.source.parent
     transcript = transcribe_meeting(
-        args.source, settings, work_dir=work_dir, diarize=not args.no_diarize
+        args.source, settings, work_dir=work_dir,
+        diarize=not args.no_diarize, progress=print_step,
     )
     path = save_transcript(transcript, Path(work_dir) / f"{args.source.stem}_segments.json")
 
@@ -188,7 +198,9 @@ def command_protocol(args: argparse.Namespace) -> int:
 
 def command_run(args: argparse.Namespace) -> int:
     settings = settings_from(args)
-    transcript = transcribe_meeting(args.source, settings, work_dir=args.out)
+    transcript = transcribe_meeting(
+        args.source, settings, work_dir=args.out, progress=print_step
+    )
     protocol = _build(transcript, args, settings)
     _report(protocol, save(protocol, args.out))
     return 0

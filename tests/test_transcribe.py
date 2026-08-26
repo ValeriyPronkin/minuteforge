@@ -190,3 +190,64 @@ def test_network_trouble_is_not_disguised_as_a_refusal():
         "hf_test", fetch=lambda url, token: (_ for _ in ()).throw(OSError("нет сети"))
     )
     assert all("нет сети" in why for why in result.values())
+
+
+# ------------------------------------------------------------- ход работы
+
+def test_progress_reports_every_step_in_order(audio, with_token):
+    from protocall.transcribe import STEP_TITLES
+
+    seen = []
+    recognize(
+        audio, Settings(device="cpu"), backend=FakeBackend(),
+        progress=lambda step: seen.append((step.name, step.done, step.share)),
+    )
+
+    names = [name for name, done, _ in seen if not done]
+    assert names == ["transcribe", "align", "diarize"]
+    assert all(STEP_TITLES[n] for n in names)
+
+
+def test_progress_share_only_grows_and_ends_at_one(audio, with_token):
+    shares = []
+    recognize(
+        audio, Settings(device="cpu"), backend=FakeBackend(),
+        progress=lambda step: shares.append(step.share),
+    )
+    assert shares == sorted(shares), "шкала не должна ехать назад"
+    assert shares[-1] == 1.0, "к концу работа сделана целиком"
+
+
+def test_reused_step_is_marked_as_such(audio, with_token, tmp_path):
+    """Шаг, взятый из сохранённого, проходит мгновенно. Если не отличать его
+    от посчитанного, человек решит, что распознавание подозрительно быстрое.
+    """
+    cache = tmp_path / "шаги"
+    recognize(audio, Settings(device="cpu"), backend=FakeBackend(), cache_dir=cache)
+
+    reused = []
+    recognize(
+        audio, Settings(device="cpu"), backend=FakeBackend(), cache_dir=cache,
+        progress=lambda step: reused.append(step.reused) if step.done else None,
+    )
+    assert all(reused), "все три шага должны быть отмечены как взятые готовыми"
+
+
+def test_broken_progress_callback_does_not_kill_the_run(audio, with_token):
+    """Сорок минут работы не должны пропасть из-за ошибки в рисовании
+    полоски прогресса."""
+    def explode(step):
+        raise RuntimeError("некуда рисовать")
+
+    result = recognize(audio, Settings(device="cpu"), backend=FakeBackend(), progress=explode)
+    assert result.segments, "работа должна закончиться нормально"
+
+
+def test_finished_step_reports_how_long_it_took(audio, with_token):
+    elapsed = []
+    recognize(
+        audio, Settings(device="cpu"), backend=FakeBackend(),
+        progress=lambda step: elapsed.append(step.elapsed_s) if step.done else None,
+    )
+    assert len(elapsed) == 3
+    assert all(value >= 0 for value in elapsed)

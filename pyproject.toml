@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "protocall"
+version = "0.1.0"
+description = "Протокол видеосовещания с поручениями: распознавание с диаризацией и локальная LLM"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "Valeriy Pronkin" }]
+keywords = ["asr", "whisperx", "diarization", "llm", "ollama", "meeting", "minutes"]
+
+dependencies = [
+    "loguru>=0.7",
+    "omegaconf>=2.3",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+asr = ["whisperx>=3.1", "torch>=2.1"]
+app = ["streamlit>=1.62"]
+dev = ["pytest>=8.0", "responses>=0.25"]
+
+[tool.setuptools.packages.find]
+include = ["protocall*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

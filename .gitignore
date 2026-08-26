@@ -1,0 +1,29 @@
+# секреты — здесь их быть не должно вовсе
+.env
+*token*.txt
+
+# данные и результаты: записи совещаний в репозиторий не попадают никогда
+data/work/
+data/input/
+data/output/
+*.wav
+*.mp4
+*.mkv
+logs/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+
+# ОС и IDE
+.DS_Store
+.idea/
+.vscode/

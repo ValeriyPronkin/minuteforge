@@ -1,0 +1,163 @@
+"""Обращение к локальной модели по OpenAI-совместимому протоколу.
+
+Модель поднимается рядом — Ollama, LM Studio, vLLM, любой сервер с
+``/v1/chat/completions``. Смысл именно в этом: стенограмма совещания уходит
+в модель целиком, и отправлять её наружу нельзя. Ключей здесь нет, потому
+что и сервиса снаружи нет.
+
+Модуль знает про HTTP и ничего не знает про протоколы и поручения: что
+спрашивать, решает :mod:`protocall.tasks`.
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from typing import Any, Protocol
+
+import requests
+from loguru import logger
+
+from .config import Settings
+
+
+class LLMError(RuntimeError):
+    """Модель не ответила или ответила не тем."""
+
+
+class LLMUnavailable(LLMError):
+    """Сервер модели недоступен.
+
+    Отдельный класс, потому что лечится это иначе: не повтором запроса, а
+    запуском сервера. Самая частая ошибка при первом знакомстве.
+    """
+
+
+class _Session(Protocol):
+    """То, что нужно клиенту от ``requests.Session``.
+
+    Протокол объявлен явно, чтобы в тестах подставлялась заглушка, а не
+    поднимался настоящий сервер: проверять разбор ответа на живой модели
+    долго и невоспроизводимо.
+    """
+
+    def post(self, url: str, *, json: dict, timeout: float) -> Any: ...
+
+
+@dataclass
+class Reply:
+    """Ответ модели."""
+
+    text: str
+    #: Сколько токенов сообщил сервер. Ollama и LM Studio отдают это
+    #: по-разному, а иногда не отдают вовсе — тогда ноль.
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    #: Сколько секунд занял запрос. Нужно не для красоты: по этому числу
+    #: видно, что модель считает на процессоре вместо видеокарты.
+    elapsed_s: float = 0.0
+
+
+class LLMClient:
+    """Клиент к локальному серверу модели."""
+
+    def __init__(self, settings: Settings | None = None, session: _Session | None = None):
+        self.settings = settings or Settings()
+        self._session = session or requests.Session()
+
+    @property
+    def endpoint(self) -> str:
+        return f"{self.settings.llm_base_url.rstrip('/')}/chat/completions"
+
+    def complete(self, system: str, user: str, *, max_tokens: int | None = None) -> Reply:
+        """Задаёт модели один вопрос и возвращает ответ.
+
+        Повтор делается только для сбоев, которые бывают временными:
+        таймаут и ошибка сервера. Отказ вида «нет такой модели» повторять
+        бессмысленно — он повторится ровно так же, только время уйдёт.
+        """
+        payload = {
+            "model": self.settings.llm_model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": self.settings.llm_temperature,
+            "max_tokens": max_tokens or self.settings.llm_max_tokens,
+            "stream": False,
+        }
+
+        last_error: Exception | None = None
+        for attempt in range(1, self.settings.llm_retries + 2):
+            started = time.perf_counter()
+            try:
+                response = self._session.post(
+                    self.endpoint, json=payload, timeout=self.settings.llm_timeout_s
+                )
+            except requests.exceptions.ConnectionError as exc:
+                # Повторять нечего: сервер не запущен, и сам он не запустится.
+                raise LLMUnavailable(
+                    f"Модель не отвечает по адресу {self.settings.llm_base_url}. "
+                    "Запущен ли Ollama или LM Studio и слушает ли он этот порт?"
+                ) from exc
+            except requests.exceptions.Timeout as exc:
+                last_error = exc
+                logger.warning(
+                    "Модель не ответила за {} с (попытка {})",
+                    self.settings.llm_timeout_s, attempt,
+                )
+                continue
+
+            if response.status_code >= 500:
+                last_error = LLMError(f"Сервер модели вернул {response.status_code}")
+                logger.warning("Сервер модели вернул {} (попытка {})", response.status_code, attempt)
+                time.sleep(min(2 ** attempt, 10))
+                continue
+            if response.status_code != 200:
+                raise LLMError(
+                    f"Сервер модели вернул {response.status_code}: "
+                    f"{_short(getattr(response, 'text', ''))}"
+                )
+
+            return _parse(response, time.perf_counter() - started)
+
+        raise LLMError(
+            f"Модель не ответила за {self.settings.llm_retries + 1} попыток: {last_error}"
+        )
+
+    def health(self) -> bool:
+        """Отвечает ли сервер и есть ли на нём заданная модель.
+
+        Проверять стоит до расчёта, а не после: распознавание часового
+        совещания идёт десятки минут, и упереться в незапущенный сервер на
+        последнем шаге особенно обидно.
+        """
+        try:
+            self.complete("Ответь одним словом.", "Проверка связи.", max_tokens=8)
+        except LLMError as exc:
+            logger.warning("Проверка связи с моделью не прошла: {}", exc)
+            return False
+        return True
+
+
+def _parse(response: Any, elapsed: float) -> Reply:
+    try:
+        body = response.json()
+        text = body["choices"][0]["message"]["content"]
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        raise LLMError(
+            f"Не разобрать ответ модели: {_short(getattr(response, 'text', ''))}"
+        ) from exc
+
+    usage = body.get("usage") or {}
+    return Reply(
+        text=(text or "").strip(),
+        prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
+        completion_tokens=int(usage.get("completion_tokens", 0) or 0),
+        elapsed_s=round(elapsed, 2),
+    )
+
+
+def _short(text: str, limit: int = 200) -> str:
+    text = (text or "").strip().replace("\n", " ")
+    return text if len(text) <= limit else text[:limit] + "…"

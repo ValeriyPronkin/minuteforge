@@ -217,3 +217,35 @@ def test_the_example_itself_parses_by_our_own_rules():
         "Собрать справку по инцидентам",
     ]
     assert tasks[0].who == "Сергей Ким" and tasks[1].who == ""
+
+
+def test_instruction_echoed_by_the_model_does_not_erase_the_answer():
+    """Мелкая модель охотно пересказывает задание перед ответом, и
+    фраза-маркер попадает в текст вместе с настоящими поручениями. Если
+    проверять маркер первым, найденное выбрасывается и человек видит ноль.
+    """
+    answer = (
+        "Хорошо! Я секретарь совещания. Если поручений нет, я отвечу "
+        f"{NOTHING_FOUND}. Вот что нашёл:\n\n"
+        "Поручение: Развернуть стенд\nКому: Тимур Асанов\nСрок: к среде"
+    )
+    tasks = parse_tasks(answer)
+    assert len(tasks) == 1
+    assert tasks[0].who == "Тимур Асанов"
+
+
+def test_honest_nothing_found_still_means_nothing():
+    assert parse_tasks(f"  {NOTHING_FOUND}  ") == []
+
+
+def test_unparsed_answer_is_kept_for_diagnosis():
+    """Ответ прозой, по-английски или не по формату выглядит так же, как
+    пустой результат. Отличить одно от другого можно только по самому
+    ответу."""
+    chunks = [Chunk([Block("И", "раз")], index=1, total=1)]
+    client = FakeClient("Модель порассуждала о погоде и ничего не выписала.")
+    answers: list[str] = []
+
+    tasks = extract_tasks(chunks, client, answers=answers)
+    assert tasks == []
+    assert answers == ["Модель порассуждала о погоде и ничего не выписала."]

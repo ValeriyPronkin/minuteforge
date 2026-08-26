@@ -135,7 +135,8 @@ def protocol_from_transcript(
     )
     logger.info("Стенограмма разбита на {} фрагментов", len(chunks))
 
-    tasks = extract_tasks(chunks, client, progress=progress)
+    answers: list[str] = []
+    tasks = extract_tasks(chunks, client, progress=progress, answers=answers)
     logger.info("Найдено поручений: {}", len(tasks))
 
     return build_protocol(
@@ -149,6 +150,7 @@ def protocol_from_transcript(
         number=meeting.number,
         attendees=meeting.attendees,
         people=meeting.people,
+        answers=answers,
     )
 
 

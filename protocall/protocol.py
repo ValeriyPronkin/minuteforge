@@ -41,6 +41,9 @@ class Protocol:
     people: list[Person] = field(default_factory=list)
     tasks: list[Task] = field(default_factory=list)
     transcript: Transcript | None = None
+    #: Ответы модели как есть. В документ не идут, нужны для разбора: когда
+    #: поручений не нашлось, только по ним и видно, в чём дело.
+    answers: list[str] = field(default_factory=list)
 
     @property
     def actionable(self) -> list[Task]:
@@ -183,6 +186,7 @@ def build_protocol(
     people: Sequence[Person] | None = None,
     secretary: str = "",
     number: str = "",
+    answers: Sequence[str] | None = None,
 ) -> Protocol:
     """Собирает протокол.
 
@@ -207,6 +211,7 @@ def build_protocol(
         people=list(people or []),
         tasks=list(tasks),
         transcript=transcript,
+        answers=list(answers or []),
     )
 
 

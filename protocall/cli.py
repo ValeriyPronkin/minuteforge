@@ -312,6 +312,12 @@ def _build(transcript: Transcript, args: argparse.Namespace, settings: Settings)
 def _report(protocol, paths: dict[str, Path]) -> None:
     unclear = len(protocol.needs_clarification)
     print(f"Поручений: {len(protocol.tasks)}, из них без исполнителя: {unclear}")
+    if not protocol.tasks and protocol.answers:
+        print("  Модель не вернула ни одного поручения. Вот её ответ целиком —")
+        print("  если это проза или пересказ задания, дело в модели:")
+        for number, answer in enumerate(protocol.answers, 1):
+            short = (answer or "(пустой ответ)").strip().replace("\n", " ")
+            print(f"    [{number}] {short[:200]}")
     if unclear:
         print("  Пункты без исполнителя не выброшены — см. раздел «Требуют уточнения».")
     for label, key in (("Протокол", "protocol"), ("Стенограмма", "transcript"), ("Поручения", "tasks")):

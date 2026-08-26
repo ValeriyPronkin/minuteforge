@@ -124,7 +124,7 @@ def parse_tasks(answer: str, *, chunk: int = 0) -> list[Task]:
     пропускается, потому что исполнитель без задачи бессмыслен.
     """
     text = (answer or "").strip()
-    if not text or NOTHING_FOUND.lower() in text.lower():
+    if not text:
         return []
 
     tasks: list[Task] = []
@@ -153,7 +153,22 @@ def parse_tasks(answer: str, *, chunk: int = 0) -> list[Task]:
 
     if current.get("what"):
         tasks.append(_build(current, chunk))
-    return tasks
+
+    if tasks:
+        return tasks
+
+    # Разобрать нечего. Отличаем честное «поручений нет» от ответа, который
+    # мы просто не поняли: мелкая модель охотно пересказывает задание перед
+    # ответом, и фраза-маркер попадает в текст вместе с настоящими
+    # поручениями. Поэтому маркер проверяется последним, а не первым.
+    if NOTHING_FOUND.lower() in text.lower():
+        return []
+
+    logger.warning(
+        "Ответ модели не разобран, поручений не извлечено. Ответ: {}",
+        text[:300].replace("\n", " "),
+    )
+    return []
 
 
 def extract_tasks(
@@ -162,6 +177,7 @@ def extract_tasks(
     *,
     skip_failed: bool = True,
     progress: Progress | None = None,
+    answers: list[str] | None = None,
 ) -> list[Task]:
     """Проходит по кускам стенограммы и собирает поручения.
 
@@ -172,6 +188,10 @@ def extract_tasks(
     :param progress: куда сообщать о ходе. Местная модель отвечает по
         десятку секунд на фрагмент, и на длинном совещании это минуты
         тишины, за которые человек успевает решить, что всё повисло.
+    :param answers: куда сложить ответы модели как есть. Когда поручений не
+        нашлось, это единственный способ понять почему: модель могла
+        ответить прозой, по-английски или пересказать задание вместо
+        ответа — и всё это выглядит одинаково, как пустой результат.
     """
     collected: list[Task] = []
     total = len(chunks) or 1
@@ -197,6 +217,8 @@ def extract_tasks(
             ))
             continue
 
+        if answers is not None:
+            answers.append(reply.text)
         found = parse_tasks(reply.text, chunk=chunk.index)
         logger.info(
             "Фрагмент {}/{}: поручений {}, ответ за {} с",

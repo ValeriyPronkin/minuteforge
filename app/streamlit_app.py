@@ -365,6 +365,21 @@ if protocol is not None:
             "и не получили выдуманного адресата — смотрите отдельный раздел."
         )
 
+    if not protocol.tasks and protocol.answers:
+        # Пустой результат выглядит одинаково при трёх разных бедах: модель
+        # ничего не нашла, ответила не по формату или заговорила о своём.
+        # Различить их можно только по самому ответу.
+        st.error(
+            "Модель не вернула ни одного поручения. Посмотрите, что она "
+            "ответила: если там проза или пересказ задания, дело в модели — "
+            "мелкие держат формат хуже. Помогает окно поменьше (фрагменты "
+            "станут короче) или другая модель."
+        )
+        with st.expander("Что ответила модель"):
+            for number, answer in enumerate(protocol.answers, 1):
+                st.markdown(f"**Фрагмент {number}**")
+                st.text(answer or "(пустой ответ)")
+
     template = st.session_state.get("template")
     document = protocol.render(template) if template else protocol.as_markdown()
     if template:

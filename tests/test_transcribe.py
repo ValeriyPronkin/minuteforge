@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from protocall.config import HF_TOKEN_ENV, Settings
-from protocall.transcribe import (
+from minuteforge.config import HF_TOKEN_ENV, Settings
+from minuteforge.transcribe import (
     MissingToken,
     RecognitionError,
     recognize,
@@ -147,7 +147,7 @@ class Denied(Exception):
 
 
 def test_access_check_passes_when_both_models_open(with_token):
-    from protocall.transcribe import GATED_MODELS, check_model_access
+    from minuteforge.transcribe import GATED_MODELS, check_model_access
 
     asked = []
     result = check_model_access("hf_test", fetch=lambda url, token: asked.append(url))
@@ -158,7 +158,7 @@ def test_access_check_passes_when_both_models_open(with_token):
 def test_access_check_names_the_model_that_is_closed():
     """Моделей две, и человек обычно подписывает только одну — ту, ссылку на
     которую ему дали. Вторая тянется как зависимость и молча ломает запуск."""
-    from protocall.transcribe import check_model_access
+    from minuteforge.transcribe import check_model_access
 
     def fetch(url, token):
         if "segmentation" in url:
@@ -174,7 +174,7 @@ def test_access_check_names_the_model_that_is_closed():
 
 
 def test_missing_token_is_reported_without_going_online():
-    from protocall.transcribe import check_model_access
+    from minuteforge.transcribe import check_model_access
 
     result = check_model_access(
         None, fetch=lambda url, token: pytest.fail("в сеть ходить незачем")
@@ -184,7 +184,7 @@ def test_missing_token_is_reported_without_going_online():
 
 def test_network_trouble_is_not_disguised_as_a_refusal():
     """Отказ в доступе и отсутствие сети лечатся по-разному."""
-    from protocall.transcribe import check_model_access
+    from minuteforge.transcribe import check_model_access
 
     result = check_model_access(
         "hf_test", fetch=lambda url, token: (_ for _ in ()).throw(OSError("нет сети"))
@@ -195,7 +195,7 @@ def test_network_trouble_is_not_disguised_as_a_refusal():
 # ------------------------------------------------------------- ход работы
 
 def test_progress_reports_every_step_in_order(audio, with_token):
-    from protocall.transcribe import STEP_TITLES
+    from minuteforge.transcribe import STEP_TITLES
 
     seen = []
     recognize(
@@ -277,7 +277,7 @@ def test_vram_is_freed_between_steps():
     Шаги идут один за другим, каждый грузит свою модель, и на карте с 8 ГБ
     третий падает на записи, которую первые два прошли без запинки.
     """
-    from protocall.transcribe import free_vram
+    from minuteforge.transcribe import free_vram
 
     torch = FakeTorch()
     assert free_vram(torch) is True
@@ -285,7 +285,7 @@ def test_vram_is_freed_between_steps():
 
 
 def test_nothing_to_free_without_a_gpu():
-    from protocall.transcribe import free_vram
+    from minuteforge.transcribe import free_vram
 
     torch = FakeTorch(available=False)
     assert free_vram(torch) is False
@@ -294,14 +294,14 @@ def test_nothing_to_free_without_a_gpu():
 
 def test_failed_cleanup_does_not_break_recognition():
     """Чистка памяти не повод ронять сорок минут работы."""
-    from protocall.transcribe import free_vram
+    from minuteforge.transcribe import free_vram
 
     assert free_vram(FakeTorch(fails=True)) is False
 
 
 def test_missing_torch_is_not_an_error():
     """Пакет ставят и без распознавания — torch тогда нет вовсе."""
-    from protocall.transcribe import free_vram
+    from minuteforge.transcribe import free_vram
 
     assert free_vram() in (True, False)
 
@@ -391,7 +391,7 @@ def test_hopeless_case_explains_what_to_free(audio, with_token):
 
 def test_custom_model_name_is_tried_first():
     """Дообученную свою модель тоже надо попробовать, а не подменять сразу."""
-    from protocall.transcribe import _ladder_from
+    from minuteforge.transcribe import _ladder_from
 
     assert _ladder_from("наша-дообученная")[0] == "наша-дообученная"
     assert _ladder_from("medium")[0] == "medium"

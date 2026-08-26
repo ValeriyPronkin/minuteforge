@@ -6,7 +6,7 @@
 что и сервиса снаружи нет.
 
 Модуль знает про HTTP и ничего не знает про протоколы и поручения: что
-спрашивать, решает :mod:`protocall.tasks`.
+спрашивать, решает :mod:`minuteforge.tasks`.
 """
 
 from __future__ import annotations

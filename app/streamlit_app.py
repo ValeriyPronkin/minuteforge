@@ -1,4 +1,4 @@
-"""Интерфейс protocall.
+"""Интерфейс minuteforge.
 
     streamlit run app/streamlit_app.py
 
@@ -21,22 +21,22 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from protocall.blocks import (  # noqa: E402
+from minuteforge.blocks import (  # noqa: E402
     UNKNOWN,
     Transcript,
     blocks_from_segments,
     consolidate,
 )
-from protocall.config import HF_TOKEN_ENV, Settings  # noqa: E402
-from protocall.llm import LLMClient  # noqa: E402
-from protocall.people import (  # noqa: E402
+from minuteforge.config import HF_TOKEN_ENV, Settings  # noqa: E402
+from minuteforge.llm import LLMClient  # noqa: E402
+from minuteforge.people import (  # noqa: E402
     merge_suggestions,
     mentioned_people,
     read_people,
     suggest_speakers,
 )
-from protocall.pipeline import Meeting, protocol_from_transcript, transcribe_meeting  # noqa: E402
-from protocall.transcribe import (  # noqa: E402
+from minuteforge.pipeline import Meeting, protocol_from_transcript, transcribe_meeting  # noqa: E402
+from minuteforge.transcribe import (  # noqa: E402
     MissingToken,
     RecognitionError,
     check_model_access,
@@ -45,7 +45,7 @@ from protocall.transcribe import (  # noqa: E402
 BASE = Settings.load(ROOT / "config.yaml")
 WORK_DIR = ROOT / "data" / "work"
 
-st.set_page_config(page_title="protocall", page_icon="📝", layout="wide")
+st.set_page_config(page_title="minuteforge", page_icon="📝", layout="wide")
 
 
 def full_width() -> dict:
@@ -220,7 +220,7 @@ settings = Settings(
 )
 
 # ---------------------------------------------------------------- шапка
-st.title("protocall")
+st.title("minuteforge")
 st.caption("Протокол видеосовещания с поручениями. Ничего не уходит с этой машины.")
 
 with st.expander("Как это работает"):

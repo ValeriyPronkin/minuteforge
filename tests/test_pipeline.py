@@ -2,17 +2,17 @@ import json
 
 import pytest
 
-from protocall.blocks import Block, Transcript
-from protocall.config import HF_TOKEN_ENV, Settings
-from protocall.llm import Reply
-from protocall.pipeline import (
+from minuteforge.blocks import Block, Transcript
+from minuteforge.config import HF_TOKEN_ENV, Settings
+from minuteforge.llm import Reply
+from minuteforge.pipeline import (
     Meeting,
     process,
     protocol_from_transcript,
     save,
     transcribe_meeting,
 )
-from protocall.tasks import NOTHING_FOUND
+from minuteforge.tasks import NOTHING_FOUND
 
 SEGMENTS = [
     {"speaker": "SPEAKER_00", "text": "Начинаем. Сроки по интеграции?", "start": 0, "end": 6},
@@ -144,14 +144,14 @@ def test_video_gets_its_audio_extracted_first(tmp_path, with_token, monkeypatch)
         path.write_bytes(b"wav")
         return path
 
-    monkeypatch.setattr("protocall.pipeline.extract_audio", fake_extract)
+    monkeypatch.setattr("minuteforge.pipeline.extract_audio", fake_extract)
     transcribe_meeting(video, Settings(device="cpu"), backend=FakeBackend(), work_dir=tmp_path)
     assert calls == [video]
 
 
 def test_audio_input_skips_extraction(audio, with_token, monkeypatch):
     monkeypatch.setattr(
-        "protocall.pipeline.extract_audio",
+        "minuteforge.pipeline.extract_audio",
         lambda *a, **k: pytest.fail("извлекать звук из wav не нужно"),
     )
     transcribe_meeting(audio, Settings(device="cpu"), backend=FakeBackend())

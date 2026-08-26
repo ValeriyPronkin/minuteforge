@@ -1,9 +1,9 @@
 import pytest
 
-from protocall.blocks import Block
-from protocall.chunking import Chunk
-from protocall.llm import LLMError, Reply
-from protocall.tasks import (
+from minuteforge.blocks import Block
+from minuteforge.chunking import Chunk
+from minuteforge.llm import LLMError, Reply
+from minuteforge.tasks import (
     NOTHING_FOUND,
     Task,
     build_prompt,

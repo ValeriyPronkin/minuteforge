@@ -1,7 +1,7 @@
 import io
 
-from protocall.blocks import Block
-from protocall.people import (
+from minuteforge.blocks import Block
+from minuteforge.people import (
     Person,
     find,
     merge_suggestions,

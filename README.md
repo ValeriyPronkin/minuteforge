@@ -1,4 +1,4 @@
-# protocall
+# minuteforge
 
 Протокол видеосовещания с поручениями: распознавание речи с разделением по
 говорящим и извлечение поручений локальной языковой моделью.
@@ -194,7 +194,7 @@ pip install torch --index-url https://download.pytorch.org/whl/cu121
 Точную команду под свою карту возьмите на pytorch.org. Проверить, что вышло:
 
 ```bash
-protocall check
+minuteforge check
 ```
 
 Эта команда разом говорит, что готово, а что нет: видит ли torch видеокарту,
@@ -271,8 +271,8 @@ ollama pull mistral
 ## Из кода
 
 ```python
-from protocall.config import Settings
-from protocall.pipeline import Meeting, process, save
+from minuteforge.config import Settings
+from minuteforge.pipeline import Meeting, process, save
 
 protocol = process(
     "data/input/meeting.mp4",
@@ -291,7 +291,7 @@ save(protocol, "data/output")
 пересобирается на любой машине, хоть с другими именами участников.
 
 ```python
-from protocall.pipeline import protocol_from_transcript, transcribe_meeting
+from minuteforge.pipeline import protocol_from_transcript, transcribe_meeting
 
 transcript = transcribe_meeting("meeting.mp4")            # нужна видеокарта
 protocol = protocol_from_transcript(transcript)           # достаточно ноутбука
@@ -371,13 +371,13 @@ protocol = protocol_from_transcript(transcript)           # достаточно
 открывать не хочется.
 
 ```bash
-protocall check                      # доступ к моделям и связь с LLM
-protocall recognize meeting.mp4      # запись -> стенограмма (нужна видеокарта)
-protocall protocol segments.json \
+minuteforge check                      # доступ к моделям и связь с LLM
+minuteforge recognize meeting.mp4      # запись -> стенограмма (нужна видеокарта)
+minuteforge protocol segments.json \
     --name SPEAKER_00="Орлов В.П." \
     --name SPEAKER_01="Сергей Ким" \
     --date "05.06.2025, 11:00"       # стенограмма -> протокол (видеокарта не нужна)
-protocall run meeting.mp4            # всё разом
+minuteforge run meeting.mp4            # всё разом
 ```
 
 Команд четыре, а не одна, по той же причине, по которой в интерфейсе три
@@ -408,21 +408,21 @@ protocall run meeting.mp4            # всё разом
 значок: они видно живут, пока шаг длится. Обещать проценты, которых никто не
 считает, было бы честнее только на вид.
 
-Без установки пакета то же самое доступно как `python -m protocall`.
+Без установки пакета то же самое доступно как `python -m minuteforge`.
 
 ## Из чего состоит
 
 | Модуль | Отвечает за |
 |---|---|
-| `protocall.audio` | звук из видео: моно 16 кГц, выравнивание громкости |
-| `protocall.transcribe` | WhisperX: распознавание, выравнивание, разделение по говорящим |
-| `protocall.blocks` | склейка реплик, нормализация меток, имена участников |
-| `protocall.chunking` | нарезка стенограммы под окно модели, с нахлёстом |
-| `protocall.llm` | запросы к локальной модели по OpenAI-совместимому протоколу |
-| `protocall.tasks` | промпты и разбор ответа: что поручено, кому, к какому сроку |
-| `protocall.protocol` | сборка документа и таблицы поручений |
-| `protocall.pipeline` | всё перечисленное по порядку |
-| `protocall.cli` | командная строка: check, recognize, protocol, run |
+| `minuteforge.audio` | звук из видео: моно 16 кГц, выравнивание громкости |
+| `minuteforge.transcribe` | WhisperX: распознавание, выравнивание, разделение по говорящим |
+| `minuteforge.blocks` | склейка реплик, нормализация меток, имена участников |
+| `minuteforge.chunking` | нарезка стенограммы под окно модели, с нахлёстом |
+| `minuteforge.llm` | запросы к локальной модели по OpenAI-совместимому протоколу |
+| `minuteforge.tasks` | промпты и разбор ответа: что поручено, кому, к какому сроку |
+| `minuteforge.protocol` | сборка документа и таблицы поручений |
+| `minuteforge.pipeline` | всё перечисленное по порядку |
+| `minuteforge.cli` | командная строка: check, recognize, protocol, run |
 
 Тяжёлое вынесено на края. Ядро — склейка реплик, нарезка, разбор ответа,
 сборка протокола — работает без видеокарты, без моделей и без запущенной
@@ -555,7 +555,7 @@ ollama pull qwen2.5:7b
 слабее одного замера на своём материале:
 
 ```bash
-protocall compare segments.json \
+minuteforge compare segments.json \
     --model mistral --model qwen2.5:7b --model llama3.1:8b \
     --out data/output/сравнение
 ```
@@ -571,8 +571,8 @@ protocall compare segments.json \
 репозитории, со всеми параметрами и объяснением каждого. Файл
 необязательный: без него берутся те же значения по умолчанию.
 
-Любое поле переопределяется переменной окружения с префиксом `PROTOCALL_`,
-например `PROTOCALL_ASR_MODEL=small`. Приоритет: умолчания, потом файл,
+Любое поле переопределяется переменной окружения с префиксом `MINUTEFORGE_`,
+например `MINUTEFORGE_ASR_MODEL=small`. Приоритет: умолчания, потом файл,
 потом окружение.
 
 Секретам в файле не место: токен HuggingFace читается только из `HF_TOKEN`.

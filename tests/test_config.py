@@ -1,4 +1,4 @@
-from protocall.config import HF_TOKEN_ENV, Settings
+from minuteforge.config import HF_TOKEN_ENV, Settings
 
 
 def test_chunk_budget_comes_from_the_model_window():
@@ -9,8 +9,8 @@ def test_chunk_budget_comes_from_the_model_window():
 def test_huge_window_means_one_piece():
     """Часовое совещание — тысяч двадцать токенов. При окне в миллион делить
     нечего, и все хлопоты с нахлёстом и повторами отпадают сами."""
-    from protocall.blocks import Block
-    from protocall.chunking import split_into_chunks
+    from minuteforge.blocks import Block
+    from minuteforge.chunking import split_into_chunks
 
     settings = Settings(llm_context_tokens=1_000_000)
     blocks = [Block("Иванов", "слово " * 200) for _ in range(200)]
@@ -42,8 +42,8 @@ def test_secrets_never_reach_the_settings_dump(monkeypatch):
 
 
 def test_environment_overrides_defaults(monkeypatch):
-    monkeypatch.setenv("PROTOCALL_ASR_MODEL", "large-v3")
-    monkeypatch.setenv("PROTOCALL_LLM_CONTEXT_TOKENS", "32768")
+    monkeypatch.setenv("MINUTEFORGE_ASR_MODEL", "large-v3")
+    monkeypatch.setenv("MINUTEFORGE_LLM_CONTEXT_TOKENS", "32768")
     settings = Settings.load("нет-такого-файла.yaml")
     assert settings.asr_model == "large-v3"
     assert settings.llm_context_tokens == 32768

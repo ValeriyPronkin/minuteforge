@@ -1,7 +1,7 @@
 """Параметры расчёта: значения по умолчанию, файл, переменные окружения.
 
 Приоритет — от низкого к высокому: умолчания, ``config.yaml``, переменные
-окружения с префиксом ``PROTOCALL_``. Секреты живут только в окружении: токен
+окружения с префиксом ``MINUTEFORGE_``. Секреты живут только в окружении: токен
 HuggingFace однажды уже был вписан в код и в файл рядом с ним, и это стоило
 отзыва токена.
 """
@@ -107,7 +107,7 @@ class Settings:
             values.update({k: v for k, v in loaded.items() if k in _names()})
 
         for name, kind in _kinds().items():
-            raw = os.environ.get(f"PROTOCALL_{name.upper()}")
+            raw = os.environ.get(f"MINUTEFORGE_{name.upper()}")
             if raw is not None:
                 values[name] = _cast(raw, kind)
 

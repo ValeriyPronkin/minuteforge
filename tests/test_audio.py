@@ -2,7 +2,7 @@ import subprocess
 
 import pytest
 
-from protocall.audio import CHANNELS, SAMPLE_RATE, AudioError, extract_audio
+from minuteforge.audio import CHANNELS, SAMPLE_RATE, AudioError, extract_audio
 
 
 class FakeFfmpeg:

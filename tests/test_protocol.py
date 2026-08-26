@@ -1,9 +1,9 @@
 import csv
 from io import StringIO
 
-from protocall.blocks import Block, Transcript
-from protocall.protocol import Protocol, build_protocol
-from protocall.tasks import Task
+from minuteforge.blocks import Block, Transcript
+from minuteforge.protocol import Protocol, build_protocol
+from minuteforge.tasks import Task
 
 
 TASKS = [
@@ -124,7 +124,7 @@ def test_unknown_is_not_listed_among_attendees():
 def test_line_after_the_attendee_list_is_not_glued_to_it():
     """Без пустой строки разметка приклеивает следующую строку к последнему
     участнику, и длительность записи оказывается его должностью."""
-    from protocall.people import Person
+    from minuteforge.people import Person
 
     protocol = Protocol(
         tasks=TASKS,
@@ -140,7 +140,7 @@ def test_line_after_the_attendee_list_is_not_glued_to_it():
 
 def test_mixed_named_and_unnamed_attendees_are_all_shown():
     """Часть меток осталась без имени — это нормально, но потерять их нельзя."""
-    from protocall.people import Person
+    from minuteforge.people import Person
 
     protocol = Protocol(
         attendees=["SPEAKER_02", "Семенов А.В.", "SPEAKER_01"],

@@ -1,8 +1,8 @@
 import pytest
 import requests
 
-from protocall.config import Settings
-from protocall.llm import LLMClient, LLMError, LLMUnavailable
+from minuteforge.config import Settings
+from minuteforge.llm import LLMClient, LLMError, LLMUnavailable
 
 
 class FakeResponse:

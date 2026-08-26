@@ -1,7 +1,7 @@
 import pytest
 
-from protocall.blocks import Block
-from protocall.chunking import Chunk, estimate_tokens, split_into_chunks
+from minuteforge.blocks import Block
+from minuteforge.chunking import Chunk, estimate_tokens, split_into_chunks
 
 
 def reply(speaker="SPEAKER_01", text="Слово."):

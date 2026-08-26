@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from protocall.cli import (
+from minuteforge.cli import (
     build_parser,
     load_transcript,
     main,
@@ -10,8 +10,8 @@ from protocall.cli import (
     save_transcript,
     settings_from,
 )
-from protocall.blocks import Block, Transcript
-from protocall.config import Settings
+from minuteforge.blocks import Block, Transcript
+from minuteforge.config import Settings
 
 SEGMENTS = [
     {"speaker": "SPEAKER_00", "text": "Подготовьте план до пятницы.", "start": 0, "end": 6},
@@ -30,7 +30,7 @@ def segments_file(tmp_path):
 
 @pytest.fixture
 def fake_llm(monkeypatch):
-    from protocall.llm import Reply
+    from minuteforge.llm import Reply
 
     class Client:
         def __init__(self, *a, **kw):
@@ -42,8 +42,8 @@ def fake_llm(monkeypatch):
         def diagnose(self):
             return ""
 
-    monkeypatch.setattr("protocall.cli.LLMClient", Client)
-    monkeypatch.setattr("protocall.pipeline.LLMClient", Client)
+    monkeypatch.setattr("minuteforge.cli.LLMClient", Client)
+    monkeypatch.setattr("minuteforge.pipeline.LLMClient", Client)
     return Client
 
 
@@ -121,7 +121,7 @@ def test_recognize_reports_labels_for_the_next_step(tmp_path, monkeypatch, capsy
     """Распознавание должно закончиться подсказкой, что делать дальше:
     метки без имён — это ровно то, чего человек не знает наизусть."""
     transcript = Transcript([Block("SPEAKER_00", "Раз.", 0, 5), Block("SPEAKER_01", "Два.", 5, 9)])
-    monkeypatch.setattr("protocall.cli.transcribe_meeting", lambda *a, **kw: transcript)
+    monkeypatch.setattr("minuteforge.cli.transcribe_meeting", lambda *a, **kw: transcript)
 
     source = tmp_path / "meeting.mp4"
     source.write_bytes(b"video")
@@ -130,17 +130,17 @@ def test_recognize_reports_labels_for_the_next_step(tmp_path, monkeypatch, capsy
     assert code == 0
     out = capsys.readouterr().out
     assert "SPEAKER_00, SPEAKER_01" in out
-    assert "protocall protocol" in out, "должна быть подсказка про следующий шаг"
+    assert "minuteforge protocol" in out, "должна быть подсказка про следующий шаг"
     assert (tmp_path / "meeting_segments.json").exists()
 
 
 def test_missing_token_exits_without_a_traceback(tmp_path, monkeypatch, capsys):
-    from protocall.transcribe import MissingToken
+    from minuteforge.transcribe import MissingToken
 
     def refuse(*args, **kwargs):
         raise MissingToken("нужен токен")
 
-    monkeypatch.setattr("protocall.cli.transcribe_meeting", refuse)
+    monkeypatch.setattr("minuteforge.cli.transcribe_meeting", refuse)
     source = tmp_path / "meeting.mp4"
     source.write_bytes(b"video")
 
@@ -151,7 +151,7 @@ def test_missing_token_exits_without_a_traceback(tmp_path, monkeypatch, capsys):
 def test_recognize_prints_progress(tmp_path, monkeypatch, capsys):
     """В терминале ход работы — единственный признак жизни: распознавание
     часовой записи идёт десятки минут молча."""
-    from protocall.transcribe import Step
+    from minuteforge.transcribe import Step
 
     def fake(source, settings=None, *, progress=None, **kwargs):
         progress(Step(name="transcribe", title="Распознаю речь", share=0.05))
@@ -160,7 +160,7 @@ def test_recognize_prints_progress(tmp_path, monkeypatch, capsys):
         ))
         return Transcript([Block("SPEAKER_00", "Раз.", 0, 5)])
 
-    monkeypatch.setattr("protocall.cli.transcribe_meeting", fake)
+    monkeypatch.setattr("minuteforge.cli.transcribe_meeting", fake)
     source = tmp_path / "meeting.mp4"
     source.write_bytes(b"video")
 
@@ -172,7 +172,7 @@ def test_recognize_prints_progress(tmp_path, monkeypatch, capsys):
 
 def test_compare_runs_the_same_transcript_through_each_model(segments_file, monkeypatch, capsys):
     """Стенограмма одна, чтобы разница была только в модели."""
-    from protocall.llm import Reply
+    from minuteforge.llm import Reply
 
     asked = []
 
@@ -189,7 +189,7 @@ def test_compare_runs_the_same_transcript_through_each_model(segments_file, monk
         def diagnose(self):
             return ""
 
-    monkeypatch.setattr("protocall.cli.LLMClient", Client)
+    monkeypatch.setattr("minuteforge.cli.LLMClient", Client)
 
     code = main([
         "compare", str(segments_file), "--model", "mistral", "--model", "qwen2.5:14b"
@@ -204,7 +204,7 @@ def test_compare_runs_the_same_transcript_through_each_model(segments_file, monk
 
 def test_unavailable_model_is_skipped_not_fatal(segments_file, monkeypatch, capsys):
     """Одна модель не скачана — это не повод бросать сравнение остальных."""
-    from protocall.llm import Reply
+    from minuteforge.llm import Reply
 
     class Client:
         def __init__(self, settings=None, *a, **kw):
@@ -216,7 +216,7 @@ def test_unavailable_model_is_skipped_not_fatal(segments_file, monkeypatch, caps
         def diagnose(self):
             return "" if self.model == "mistral" else "модель не скачана"
 
-    monkeypatch.setattr("protocall.cli.LLMClient", Client)
+    monkeypatch.setattr("minuteforge.cli.LLMClient", Client)
 
     code = main(["compare", str(segments_file), "--model", "mistral", "--model", "нетакой"])
     out = capsys.readouterr().out
@@ -232,7 +232,7 @@ def test_compare_fails_when_nobody_answered(segments_file, monkeypatch, capsys):
         def diagnose(self):
             return "сервер не поднят"
 
-    monkeypatch.setattr("protocall.cli.LLMClient", Client)
+    monkeypatch.setattr("minuteforge.cli.LLMClient", Client)
     assert main(["compare", str(segments_file), "--model", "mistral"]) == 1
     assert "Ни одна модель не ответила" in capsys.readouterr().err
 
@@ -240,9 +240,9 @@ def test_compare_fails_when_nobody_answered(segments_file, monkeypatch, capsys):
 def test_check_reports_the_environment(monkeypatch, capsys):
     """Без CUDA всё выглядит исправным и просто считает в двадцать раз
     дольше — человек решает, что так и должно быть, и ждёт часами."""
-    from protocall.cli import describe_environment
+    from minuteforge.cli import describe_environment
 
-    monkeypatch.setattr("protocall.cli.ffmpeg_available", lambda: False)
+    monkeypatch.setattr("minuteforge.cli.ffmpeg_available", lambda: False)
     notes = [note for _, note in describe_environment()]
 
     assert any("ffmpeg не найден" in note for note in notes)
@@ -257,9 +257,9 @@ def test_check_explains_a_cpu_only_torch(monkeypatch, capsys):
     fake_torch = types.ModuleType("torch")
     fake_torch.cuda = types.SimpleNamespace(is_available=lambda: False)
     monkeypatch.setitem(_sys.modules, "torch", fake_torch)
-    monkeypatch.setattr("protocall.cli.ffmpeg_available", lambda: True)
+    monkeypatch.setattr("minuteforge.cli.ffmpeg_available", lambda: True)
 
-    from protocall.cli import describe_environment
+    from minuteforge.cli import describe_environment
 
     notes = [note for good, note in describe_environment() if not good]
     assert any("download.pytorch.org" in note for note in notes)
@@ -267,8 +267,8 @@ def test_check_explains_a_cpu_only_torch(monkeypatch, capsys):
 
 def test_check_returns_nonzero_when_something_is_missing(monkeypatch, capsys):
     """Годится первой строкой пакетного скрипта: не настроено — не считаем."""
-    monkeypatch.setattr("protocall.cli.describe_environment", lambda: [(False, "нет ffmpeg")])
-    monkeypatch.setattr("protocall.cli.check_model_access", lambda *a, **kw: {})
+    monkeypatch.setattr("minuteforge.cli.describe_environment", lambda: [(False, "нет ffmpeg")])
+    monkeypatch.setattr("minuteforge.cli.check_model_access", lambda *a, **kw: {})
 
     class Client:
         def __init__(self, *a, **kw):
@@ -280,6 +280,6 @@ def test_check_returns_nonzero_when_something_is_missing(monkeypatch, capsys):
         def available_models(self):
             return []
 
-    monkeypatch.setattr("protocall.cli.LLMClient", Client)
+    monkeypatch.setattr("minuteforge.cli.LLMClient", Client)
     assert main(["check"]) == 1
     assert "нет ffmpeg" in capsys.readouterr().out

@@ -1,8 +1,8 @@
 """Командная строка.
 
-    python -m protocall recognize meeting.mp4
-    python -m protocall protocol segments.json --name SPEAKER_00="Орлов В.П."
-    python -m protocall run meeting.mp4
+    python -m minuteforge recognize meeting.mp4
+    python -m minuteforge protocol segments.json --name SPEAKER_00="Орлов В.П."
+    python -m minuteforge run meeting.mp4
 
 Три команды, а не одна, по той же причине, по которой в интерфейсе три шага:
 распознавание требует видеокарты, сборка протокола — нет, а между ними
@@ -35,7 +35,7 @@ from .transcribe import GATED_MODELS, MissingToken, RecognitionError, check_mode
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="protocall",
+        prog="minuteforge",
         description="Протокол видеосовещания с поручениями.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
@@ -225,11 +225,11 @@ def command_check(args: argparse.Namespace) -> int:
     # Проверка сама рассказывает о каждой находке понятным языком, и
     # служебные предупреждения поверх этого только сбивают: одно и то же будет
     # сказано дважды, второй раз — трассировкой про Connection refused.
-    logger.disable("protocall")
+    logger.disable("minuteforge")
     try:
         return _run_checks(settings, ok)
     finally:
-        logger.enable("protocall")
+        logger.enable("minuteforge")
 
 
 def _run_checks(settings: Settings, ok: bool) -> int:
@@ -281,7 +281,7 @@ def command_recognize(args: argparse.Namespace) -> int:
     print(f"Реплик: {len(transcript.blocks)}, говорящих: {len(transcript.speakers)}")
     print(f"Метки: {', '.join(transcript.speakers)}")
     print(f"Стенограмма: {path}")
-    print("Дальше: protocall protocol", path, '--name SPEAKER_00="Фамилия И.О."')
+    print("Дальше: minuteforge protocol", path, '--name SPEAKER_00="Фамилия И.О."')
     return 0
 
 

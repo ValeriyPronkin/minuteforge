@@ -1,6 +1,6 @@
 import pytest
 
-from protocall.blocks import (
+from minuteforge.blocks import (
     UNKNOWN,
     Block,
     Transcript,

@@ -17,8 +17,8 @@
 ## 1. Поставить
 
 ```bash
-git clone https://github.com/ValeriyPronkin/protocall
-cd protocall
+git clone https://github.com/ValeriyPronkin/minuteforge
+cd minuteforge
 python -m venv .venv
 .venv\Scripts\activate          # Windows; на macOS и Linux: source .venv/bin/activate
 
@@ -131,7 +131,7 @@ streamlit run app/streamlit_app.py
 Сначала — одна команда, которая разом скажет, что готово, а что нет:
 
 ```bash
-protocall check
+minuteforge check
 ```
 
 Она проверяет ffmpeg, видит ли torch видеокарту, есть ли доступ к моделям
@@ -156,9 +156,9 @@ protocall check
 То же самое из командной строки — пригодится, когда записей много:
 
 ```bash
-protocall check                    # всё ли настроено
-protocall recognize meeting.mp4    # стенограмма
-protocall protocol meeting_segments.json --name SPEAKER_00="Орлов В.П."
+minuteforge check                    # всё ли настроено
+minuteforge recognize meeting.mp4    # стенограмма
+minuteforge protocol meeting_segments.json --name SPEAKER_00="Орлов В.П."
 ```
 
 ## Если что-то не пошло

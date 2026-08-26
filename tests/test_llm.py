@@ -178,3 +178,42 @@ def test_remote_model_still_respects_the_environment():
     к ней — отключать его там нельзя."""
     remote = LLMClient(Settings(llm_base_url="http://gpu-server.local:11434/v1"))
     assert remote._session.trust_env is True
+
+
+class ModelsSession(FakeSession):
+    """Заглушка, умеющая отвечать и на запрос списка моделей."""
+
+    def __init__(self, models_response, *responses):
+        super().__init__(*responses)
+        self.models_response = models_response
+        self.asked = []
+
+    def get(self, url, *, timeout):
+        self.asked.append(url)
+        if isinstance(self.models_response, Exception):
+            raise self.models_response
+        return self.models_response
+
+
+def models(*names):
+    return FakeResponse({"data": [{"id": name} for name in names]})
+
+
+def test_installed_models_are_listed():
+    """Человек должен выбирать из установленного, а не вспоминать точное
+    написание: ошибиться в «qwen2.5:14b» проще простого."""
+    session = ModelsSession(models("qwen2.5:14b", "mistral:latest"))
+    assert LLMClient(FAST, session).available_models() == ["mistral:latest", "qwen2.5:14b"]
+    assert session.asked[0].endswith("/v1/models")
+
+
+def test_unreachable_server_gives_an_empty_list_not_an_error():
+    """Спросить не удалось — не беда: имя модели можно вписать руками."""
+    session = ModelsSession(requests.exceptions.ConnectionError())
+    assert LLMClient(FAST, session).available_models() == []
+
+
+def test_unexpected_answer_shape_is_survived():
+    """На этом адресе может отвечать вовсе не Ollama."""
+    assert LLMClient(FAST, ModelsSession(FakeResponse({"что-то": "иное"}))).available_models() == []
+    assert LLMClient(FAST, ModelsSession(FakeResponse(None, 404, "nope"))).available_models() == []

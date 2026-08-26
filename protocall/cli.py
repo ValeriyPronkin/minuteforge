@@ -165,11 +165,16 @@ def command_check(args: argparse.Namespace) -> int:
         print(f"  {'ок  ' if not why else 'НЕТ '} {name}{'' if not why else ': ' + why}")
         ok = ok and not why
 
-    trouble = LLMClient(settings).diagnose()
+    client = LLMClient(settings)
+    trouble = client.diagnose()
     print(f"  {'ок  ' if not trouble else 'НЕТ '} модель {settings.llm_model}")
     if trouble:
         print(f"       {trouble}")
         ok = False
+
+    installed = client.available_models()
+    if installed:
+        print(f"  установлены: {', '.join(installed)}")
 
     return 0 if ok else 1
 

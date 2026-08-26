@@ -128,7 +128,22 @@ with st.sidebar:
 
     st.header("Модель для поручений")
     llm_url = st.text_input("Адрес", BASE.llm_base_url)
-    llm_model = st.text_input("Модель", BASE.llm_model)
+
+    # Спрашиваем у сервера, что на нём есть: вспоминать точное написание
+    # «qwen2.5:14b» человек не обязан, а сервер на опечатку отвечает сухим
+    # отказом. Не ответил — остаётся поле для ввода руками.
+    installed = LLMClient(Settings(llm_base_url=llm_url)).available_models()
+    if installed:
+        default = installed.index(BASE.llm_model) if BASE.llm_model in installed else 0
+        llm_model = st.selectbox("Модель", installed, index=default)
+        st.caption(
+            "Для извлечения поручений семимиллиардные модели слабоваты — "
+            "недобирают половину. Заметно лучше qwen2.5:14b, если хватает "
+            "видеопамяти (нужно около 10 ГБ), либо llama3.1:8b."
+        )
+    else:
+        llm_model = st.text_input("Модель", BASE.llm_model)
+        st.caption("Список моделей получить не удалось — впишите имя руками.")
     context = st.select_slider(
         "Окно модели, токенов",
         options=[4096, 8192, 16384, 32768, 131072, 1_000_000],

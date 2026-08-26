@@ -48,6 +48,8 @@ class _Session(Protocol):
 
     def post(self, url: str, *, json: dict, timeout: float) -> Any: ...
 
+    def get(self, url: str, *, timeout: float) -> Any: ...
+
 
 @dataclass
 class Reply:
@@ -141,6 +143,34 @@ class LLMClient:
 
         raise LLMError(
             f"Модель не ответила за {self.settings.llm_retries + 1} попыток: {last_error}"
+        )
+
+    def available_models(self) -> list[str]:
+        """Какие модели подняты на сервере.
+
+        Нужно, чтобы человек выбирал из установленного, а не вспоминал
+        точное написание имени: ошибиться в «qwen2.5:14b» проще простого, а
+        сервер на такое отвечает сухим отказом.
+
+        Пустой список означает «спросить не удалось» — сервер не поднят,
+        отвечает иначе или это вовсе не Ollama. Это не ошибка: имя модели
+        всегда можно вписать руками.
+        """
+        url = f"{self.settings.llm_base_url.rstrip('/')}/models"
+        try:
+            response = self._session.get(url, timeout=10)
+            if getattr(response, "status_code", 0) != 200:
+                return []
+            body = response.json()
+        except Exception as exc:
+            logger.info("Список моделей получить не удалось: {}", exc)
+            return []
+
+        items = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(items, list):
+            return []
+        return sorted(
+            str(item.get("id")) for item in items if isinstance(item, dict) and item.get("id")
         )
 
     def health(self) -> bool:

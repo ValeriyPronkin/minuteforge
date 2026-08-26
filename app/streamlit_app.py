@@ -74,8 +74,15 @@ with st.sidebar:
         # Секунда проверки против сорока минут распознавания, которое
         # упрётся в отказ на последнем шаге.
         access = check_model_access(BASE.hf_token)
+        # Обычным if, а не тернарным выражением: streamlit печатает любое
+        # «висящее» выражение, и на экран вываливается объект вместе со
+        # своей документацией вместо короткого статуса.
         for model, why in access.items():
-            st.success(f"{model}: доступ есть") if not why else st.error(f"{model}: {why}")
+            name = model.split("/")[-1]
+            if why:
+                st.error(f"{name}: {why}")
+            else:
+                st.success(f"{name}: доступ есть")
         if any(access.values()):
             st.caption(
                 "Условия принимаются на странице модели, на вкладке Model card: "
@@ -161,7 +168,10 @@ if ready_segments is not None:
     st.success(f"Загружена готовая стенограмма: {len(st.session_state['segments'])} сегментов.")
 
 if uploaded is not None:
-    st.audio(uploaded) if uploaded.type.startswith("audio") else st.video(uploaded)
+    if uploaded.type.startswith("audio"):
+        st.audio(uploaded)
+    else:
+        st.video(uploaded)
     if st.button("Распознать", type="primary"):
         WORK_DIR.mkdir(parents=True, exist_ok=True)
         source = WORK_DIR / uploaded.name

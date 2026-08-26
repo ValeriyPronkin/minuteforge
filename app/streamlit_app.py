@@ -111,9 +111,11 @@ with st.sidebar:
     )
     if st.button("Проверить связь", **full_width()):
         probe = LLMClient(Settings(llm_base_url=llm_url, llm_model=llm_model, llm_retries=0))
-        st.success("Модель отвечает.") if probe.health() else st.error(
-            "Модель не отвечает. Запущен ли Ollama или LM Studio?"
-        )
+        trouble = probe.diagnose()
+        if not trouble:
+            st.success(f"Модель «{llm_model}» отвечает.")
+        else:
+            st.error(trouble)
 
 settings = Settings(
     asr_model=asr_model,

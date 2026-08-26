@@ -140,3 +140,41 @@ def test_max_tokens_can_be_overridden_per_request():
     session = FakeSession(answer("ок"))
     LLMClient(FAST, session).complete("s", "u", max_tokens=8)
     assert session.calls[0]["json"]["max_tokens"] == 8
+
+
+def test_diagnose_is_silent_when_everything_works():
+    assert LLMClient(FAST, FakeSession(answer("ок"))).diagnose() == ""
+
+
+def test_server_down_and_model_missing_are_different_diagnoses():
+    """Сервер не поднят — его запускают. Сервер отвечает, но отказывает —
+    почти всегда не скачана модель. Сказать «не отвечает» во втором случае
+    значит отправить человека чинить исправное.
+    """
+    down = LLMClient(FAST, FakeSession(requests.exceptions.ConnectionError())).diagnose()
+    assert "11434" in down
+    assert "pull" not in down, "чинить надо сервер, а не скачивать модель"
+
+    missing = LLMClient(
+        Settings(llm_model="mistral", llm_retries=0),
+        FakeSession(FakeResponse(status_code=404, text="model 'mistral' not found")),
+    )
+    trouble = missing.diagnose()
+    assert "отвечает" in trouble
+    assert "ollama pull mistral" in trouble
+
+
+def test_local_model_is_not_routed_through_a_corporate_proxy():
+    """На рабочей машине заданы HTTP_PROXY и HTTPS_PROXY, и requests гонит
+    через прокси даже localhost. Прокси про него не знает и отказывает — со
+    стороны это выглядит как «Ollama не запущена», хотя она работает.
+    """
+    local = LLMClient(Settings(llm_base_url="http://localhost:11434/v1"))
+    assert local._session.trust_env is False
+
+
+def test_remote_model_still_respects_the_environment():
+    """Если модель вынесена на сервер, прокси может быть единственным путём
+    к ней — отключать его там нельзя."""
+    remote = LLMClient(Settings(llm_base_url="http://gpu-server.local:11434/v1"))
+    assert remote._session.trust_env is True

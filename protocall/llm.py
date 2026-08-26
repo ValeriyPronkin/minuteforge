@@ -14,11 +14,16 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from typing import Any, Protocol
+from urllib.parse import urlparse
 
 import requests
 from loguru import logger
 
 from .config import Settings
+
+
+#: Адреса, которые заведомо на этой же машине.
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 
 
 class LLMError(RuntimeError):
@@ -63,7 +68,20 @@ class LLMClient:
 
     def __init__(self, settings: Settings | None = None, session: _Session | None = None):
         self.settings = settings or Settings()
-        self._session = session or requests.Session()
+        self._session = session or self._local_session()
+
+    def _local_session(self) -> requests.Session:
+        """Сессия, которая не пойдёт к соседу через проходную.
+
+        На корпоративной машине почти всегда заданы HTTP_PROXY и HTTPS_PROXY,
+        и requests послушно гонит через прокси даже обращение к localhost.
+        Прокси про localhost ничего не знает и отвечает отказом — со стороны
+        это выглядит как «Ollama не запущена», хотя она работает.
+        """
+        session = requests.Session()
+        if urlparse(self.settings.llm_base_url).hostname in LOCAL_HOSTS:
+            session.trust_env = False
+        return session
 
     @property
     def endpoint(self) -> str:
@@ -126,18 +144,36 @@ class LLMClient:
         )
 
     def health(self) -> bool:
-        """Отвечает ли сервер и есть ли на нём заданная модель.
+        """Отвечает ли сервер и есть ли на нём заданная модель."""
+        return not self.diagnose()
+
+    def diagnose(self) -> str:
+        """Что мешает работать с моделью. Пустая строка — всё в порядке.
 
         Проверять стоит до расчёта, а не после: распознавание часового
         совещания идёт десятки минут, и упереться в незапущенный сервер на
         последнем шаге особенно обидно.
+
+        Причин две, и они лечатся разным. Сервер не поднят — его надо
+        запустить. Сервер отвечает, но отказывает — почти всегда это значит,
+        что модель не скачана, и говорить в таком случае «сервер не
+        отвечает» значит отправить человека чинить исправное.
         """
         try:
             self.complete("Ответь одним словом.", "Проверка связи.", max_tokens=8)
+        except LLMUnavailable as exc:
+            logger.warning("Сервер модели недоступен: {}", exc)
+            return str(exc)
         except LLMError as exc:
-            logger.warning("Проверка связи с моделью не прошла: {}", exc)
-            return False
-        return True
+            logger.warning("Модель не отвечает как надо: {}", exc)
+            return (
+                f"Сервер по адресу {self.settings.llm_base_url} отвечает, но "
+                f"работать отказывается: {exc}\n"
+                f"Чаще всего это значит, что модель «{self.settings.llm_model}» "
+                "не скачана. Для Ollama: ollama pull "
+                f"{self.settings.llm_model}"
+            )
+        return ""
 
 
 def _parse(response: Any, elapsed: float) -> Reply:

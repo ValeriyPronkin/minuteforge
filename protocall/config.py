@@ -42,9 +42,18 @@ class Settings:
     offline_models: bool = False
 
     # --- нарезка -------------------------------------------------------
-    #: Бюджет куска в токенах. Меньше окна модели: место нужно ещё промпту
-    #: и ответу, иначе ответ обрежется на середине последнего поручения.
-    chunk_max_tokens: int = 6000
+    #: Окно модели в токенах. Отсюда считается бюджет куска — нарезка нужна
+    #: ровно потому, что стенограмма не влезает целиком. У модели с большим
+    #: окном кусок получится один: часовое совещание это тысяч двадцать
+    #: токенов, и при окне в миллион делить нечего.
+    llm_context_tokens: int = 8192
+    #: Бюджет куска в токенах. Пусто — считать от окна. Задавать вручную
+    #: имеет смысл, чтобы сделать куски **меньше** расчётных: малая модель
+    #: на длинном фрагменте начинает терять поручения из середины.
+    chunk_max_tokens: int | None = None
+    #: Какую долю окна отдать тексту. Остальное — промпту и ответу: если
+    #: занять окно целиком, ответ обрежется на середине последнего поручения.
+    chunk_context_share: float = 0.65
     #: Сколько реплик повторить в начале следующего куска.
     chunk_overlap_blocks: int = 1
 
@@ -66,6 +75,13 @@ class Settings:
     output_dir: Path = field(default_factory=lambda: Path("data/output"))
     log_dir: Path = field(default_factory=lambda: Path("logs"))
     log_level: str = "INFO"
+
+    @property
+    def chunk_budget(self) -> int:
+        """Сколько токенов стенограммы уходит в один запрос."""
+        if self.chunk_max_tokens:
+            return int(self.chunk_max_tokens)
+        return max(500, int(self.llm_context_tokens * self.chunk_context_share))
 
     @property
     def hf_token(self) -> str | None:

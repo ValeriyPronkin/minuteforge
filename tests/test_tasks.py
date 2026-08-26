@@ -193,3 +193,27 @@ def test_unknown_speaker_is_not_offered_to_the_model_as_a_person():
     assert "Участники фрагмента: Иванов." in user
     assert "UNKNOWN" not in user.split("Стенограмма:")[0]
     assert "UNKNOWN: Плохо слышно." in user, "сам текст теряться не должен"
+
+
+def test_prompt_shows_the_model_an_example():
+    """Семимиллиардная модель держит формат заметно устойчивее, когда видит
+    образец. Из дешёвых способов вытянуть малую модель это самый заметный."""
+    system, _ = build_prompt(Chunk([Block("Иванов", "Раз.")], index=1, total=1))
+    assert "Пример." in system
+    assert "Поручение: Подготовить план работ" in system
+    # В примере нарочно есть поручение без исполнителя: модель должна видеть,
+    # что «не указано» — допустимый ответ, а не повод выдумать фамилию.
+    assert "Кому: не указано" in system
+
+
+def test_the_example_itself_parses_by_our_own_rules():
+    """Образец в промпте должен разбираться тем же кодом, что и ответ модели.
+    Иначе мы просим формат, который сами не понимаем."""
+    system, _ = build_prompt(Chunk([Block("Иванов", "Раз.")], index=1, total=1))
+    answer = system.split("Ответ:", 1)[1]
+    tasks = parse_tasks(answer)
+    assert [t.what for t in tasks] == [
+        "Подготовить план работ по выгрузке и согласовать",
+        "Собрать справку по инцидентам",
+    ]
+    assert tasks[0].who == "Сергей Ким" and tasks[1].who == ""

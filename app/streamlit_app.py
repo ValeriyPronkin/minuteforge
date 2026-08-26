@@ -67,6 +67,14 @@ with st.sidebar:
     st.header("Модель для поручений")
     llm_url = st.text_input("Адрес", BASE.llm_base_url)
     llm_model = st.text_input("Модель", BASE.llm_model)
+    context = st.select_slider(
+        "Окно модели, токенов",
+        options=[4096, 8192, 16384, 32768, 131072, 1_000_000],
+        value=BASE.llm_context_tokens,
+        help="Отсюда считается размер фрагмента. Нарезка нужна ровно потому, "
+        "что стенограмма не влезает в окно целиком: при большом окне фрагмент "
+        "будет один, и повторов на границах не возникнет вовсе.",
+    )
     if st.button("Проверить связь", width="stretch"):
         probe = LLMClient(Settings(llm_base_url=llm_url, llm_model=llm_model, llm_retries=0))
         st.success("Модель отвечает.") if probe.health() else st.error(
@@ -79,6 +87,7 @@ settings = Settings(
     speakers=int(speakers) or None,
     llm_base_url=llm_url,
     llm_model=llm_model,
+    llm_context_tokens=int(context),
     chunk_max_tokens=BASE.chunk_max_tokens,
     chunk_overlap_blocks=BASE.chunk_overlap_blocks,
     offline_models=BASE.offline_models,

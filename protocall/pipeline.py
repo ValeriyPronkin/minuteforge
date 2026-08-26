@@ -99,7 +99,7 @@ def protocol_from_transcript(
 
     chunks = split_into_chunks(
         blocks,
-        max_tokens=settings.chunk_max_tokens,
+        max_tokens=settings.chunk_budget,
         overlap_blocks=settings.chunk_overlap_blocks,
     )
     logger.info("Стенограмма разбита на {} фрагментов", len(chunks))

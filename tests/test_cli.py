@@ -168,3 +168,70 @@ def test_recognize_prints_progress(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Распознаю речь — 12.3 с" in out
     assert "65%" in out
+
+
+def test_compare_runs_the_same_transcript_through_each_model(segments_file, monkeypatch, capsys):
+    """Стенограмма одна, чтобы разница была только в модели."""
+    from protocall.llm import Reply
+
+    asked = []
+
+    class Client:
+        def __init__(self, settings=None, *a, **kw):
+            self.model = settings.llm_model if settings else "?"
+
+        def complete(self, system, user, **kwargs):
+            asked.append(self.model)
+            # Одна модель находит поручение, другая нет.
+            text = ANSWER if self.model == "qwen2.5:14b" else "НЕТ ПОРУЧЕНИЙ"
+            return Reply(text=text)
+
+        def diagnose(self):
+            return ""
+
+    monkeypatch.setattr("protocall.cli.LLMClient", Client)
+
+    code = main([
+        "compare", str(segments_file), "--model", "mistral", "--model", "qwen2.5:14b"
+    ])
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert set(asked) == {"mistral", "qwen2.5:14b"}
+    assert "mistral" in out and "qwen2.5:14b" in out
+    assert "не оценка" in out, "числа нельзя подавать как приговор"
+
+
+def test_unavailable_model_is_skipped_not_fatal(segments_file, monkeypatch, capsys):
+    """Одна модель не скачана — это не повод бросать сравнение остальных."""
+    from protocall.llm import Reply
+
+    class Client:
+        def __init__(self, settings=None, *a, **kw):
+            self.model = settings.llm_model if settings else "?"
+
+        def complete(self, system, user, **kwargs):
+            return Reply(text=ANSWER)
+
+        def diagnose(self):
+            return "" if self.model == "mistral" else "модель не скачана"
+
+    monkeypatch.setattr("protocall.cli.LLMClient", Client)
+
+    code = main(["compare", str(segments_file), "--model", "mistral", "--model", "нетакой"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "нетакой: пропущена" in out
+
+
+def test_compare_fails_when_nobody_answered(segments_file, monkeypatch, capsys):
+    class Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        def diagnose(self):
+            return "сервер не поднят"
+
+    monkeypatch.setattr("protocall.cli.LLMClient", Client)
+    assert main(["compare", str(segments_file), "--model", "mistral"]) == 1
+    assert "Ни одна модель не ответила" in capsys.readouterr().err

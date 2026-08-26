@@ -18,6 +18,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
+from dataclasses import replace
 from pathlib import Path
 
 from loguru import logger
@@ -63,6 +65,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     protocol.add_argument("segments", type=Path, help="файл стенограммы json")
     _add_meeting_arguments(protocol)
+
+    compare = commands.add_parser(
+        "compare",
+        help="прогнать одну стенограмму через несколько моделей и сравнить",
+    )
+    compare.add_argument("segments", type=Path, help="файл стенограммы json")
+    compare.add_argument(
+        "--model", action="append", default=[], required=True,
+        help="какую модель проверить. Можно несколько раз.",
+    )
+    compare.add_argument("--llm-url", default=None)
+    compare.add_argument("--out", type=Path, default=None, help="куда сложить результаты")
 
     run = commands.add_parser("run", help="запись -> протокол, всё разом")
     run.add_argument("source", type=Path, help="видео или аудио")
@@ -205,6 +219,57 @@ def command_recognize(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_compare(args: argparse.Namespace) -> int:
+    """Сравнивает модели на одной и той же стенограмме.
+
+    Спорить о том, какая модель лучше, бессмысленно: на извлечении поручений
+    из русского совещания они ведут себя по-разному, и решает это замер на
+    вашем материале, а не общие соображения. Стенограмма берётся одна, чтобы
+    разница была только в модели.
+    """
+    transcript = load_transcript(args.segments)
+    settings = settings_from(args)
+    rows = []
+
+    for name in args.model:
+        model_settings = replace(settings, llm_model=name)
+        client = LLMClient(model_settings)
+        trouble = client.diagnose()
+        if trouble:
+            print(f"{name}: пропущена — {trouble.splitlines()[0]}")
+            continue
+
+        print(f"{name}: считаю…", flush=True)
+        started = time.perf_counter()
+        protocol = protocol_from_transcript(
+            transcript, model_settings, client=client
+        )
+        elapsed = time.perf_counter() - started
+        rows.append((name, protocol, elapsed))
+
+        if args.out:
+            save(protocol, args.out, stem=f"protocol_{name.replace(':', '_')}")
+
+    if not rows:
+        print("Ни одна модель не ответила.", file=sys.stderr)
+        return 1
+
+    print()
+    print(f"{'Модель':<22} {'Поручений':>9} {'С исполн.':>9} {'Время, с':>9}")
+    for name, protocol, elapsed in rows:
+        print(
+            f"{name:<22} {len(protocol.tasks):>9} "
+            f"{len(protocol.actionable):>9} {elapsed:>9.0f}"
+        )
+
+    print()
+    print("Числа — не оценка: больше найденных поручений не значит «лучше».")
+    print("Смотрите сами протоколы: модель могла принять обсуждение за поручение.")
+    if args.out:
+        print(f"Протоколы для сверки: {args.out}")
+    return 0
+
+
 def command_protocol(args: argparse.Namespace) -> int:
     settings = settings_from(args)
     transcript = load_transcript(args.segments)
@@ -254,6 +319,7 @@ def _report(protocol, paths: dict[str, Path]) -> None:
 
 COMMANDS = {
     "check": command_check,
+    "compare": command_compare,
     "recognize": command_recognize,
     "protocol": command_protocol,
     "run": command_run,

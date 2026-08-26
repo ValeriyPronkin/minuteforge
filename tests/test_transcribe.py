@@ -304,3 +304,95 @@ def test_missing_torch_is_not_an_error():
     from protocall.transcribe import free_vram
 
     assert free_vram() in (True, False)
+
+
+# ------------------------------------- уступки при нехватке видеопамяти
+
+class OutOfMemoryError(RuntimeError):
+    """Так это называется у torch."""
+
+
+class GreedyBackend(FakeBackend):
+    """Отказывает, пока не сойдутся модель и размер порции."""
+
+    def __init__(self, works_with=("small", 1)):
+        super().__init__()
+        self.works_model, self.works_batch = works_with
+        self.attempts = []
+
+    def transcribe(self, audio, *, model, language, batch_size, device):
+        self.attempts.append((model, batch_size))
+        if model != self.works_model or batch_size > self.works_batch:
+            raise OutOfMemoryError("CUDA out of memory. Tried to allocate 2.00 GiB")
+        return {"segments": [{"text": "Готово."}], "language": language}
+
+
+def test_batch_is_halved_before_the_model_is_downgraded(audio, with_token):
+    """Порция влияет на память сильно, а на качество не влияет вовсе —
+    уступать надо сначала ею."""
+    backend = GreedyBackend(works_with=("medium", 2))
+    result = recognize(audio, Settings(device="cpu", asr_model="medium", batch_size=8),
+                       backend=backend)
+
+    assert [model for model, _ in backend.attempts] == ["medium"] * 3
+    assert [batch for _, batch in backend.attempts] == [8, 4, 2]
+    assert result.asr_model == "medium", "модель менять не понадобилось"
+    assert result.batch_size == 2
+
+
+def test_model_steps_down_when_the_batch_cannot_shrink(audio, with_token):
+    backend = GreedyBackend(works_with=("small", 8))
+    result = recognize(audio, Settings(device="cpu", asr_model="medium", batch_size=8),
+                       backend=backend)
+
+    assert result.asr_model == "small"
+    assert any("не поместилась" in note for note in result.fallbacks)
+
+
+def test_downgrade_is_said_out_loud(audio, with_token):
+    """Расшифровка, сделанная моделью поменьше, — другая расшифровка.
+    Человек должен знать, что получил именно её."""
+    backend = GreedyBackend(works_with=("tiny", 8))
+    result = recognize(audio, Settings(device="cpu", asr_model="large-v3", batch_size=8),
+                       backend=backend)
+
+    assert result.asr_model == "tiny"
+    assert result.fallbacks, "уступка не должна пройти молча"
+
+
+def test_nothing_is_conceded_when_everything_fits(audio, with_token):
+    result = recognize(audio, Settings(device="cpu", asr_model="medium", batch_size=8),
+                       backend=FakeBackend())
+    assert result.fallbacks == []
+    assert (result.asr_model, result.batch_size) == ("medium", 8)
+
+
+def test_other_errors_are_not_retried(audio, with_token):
+    """Уступать имеет смысл только памяти. Всё остальное повторится так же."""
+    class Broken(FakeBackend):
+        def transcribe(self, audio, **kwargs):
+            self.calls.append("transcribe")
+            raise RuntimeError("модель повреждена")
+
+    backend = Broken()
+    with pytest.raises(RuntimeError, match="повреждена"):
+        recognize(audio, Settings(device="cpu"), backend=backend)
+    assert len(backend.calls) == 1
+
+
+def test_hopeless_case_explains_what_to_free(audio, with_token):
+    class Hopeless(FakeBackend):
+        def transcribe(self, audio, **kwargs):
+            raise OutOfMemoryError("CUDA out of memory")
+
+    with pytest.raises(RecognitionError, match="OLLAMA_KEEP_ALIVE"):
+        recognize(audio, Settings(device="cpu", asr_model="tiny"), backend=Hopeless())
+
+
+def test_custom_model_name_is_tried_first():
+    """Дообученную свою модель тоже надо попробовать, а не подменять сразу."""
+    from protocall.transcribe import _ladder_from
+
+    assert _ladder_from("наша-дообученная")[0] == "наша-дообученная"
+    assert _ladder_from("medium")[0] == "medium"
+    assert "tiny" in _ladder_from("medium")

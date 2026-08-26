@@ -146,6 +146,10 @@ class Transcript:
     """Стенограмма целиком."""
 
     blocks: list[Block] = field(default_factory=list)
+    #: Что пришлось уступить при распознавании: например, модель поменьше,
+    #: потому что заказанная не поместилась в видеопамять. Пусто — прошло
+    #: как заказано.
+    notes: list[str] = field(default_factory=list)
 
     @property
     def duration_min(self) -> float:

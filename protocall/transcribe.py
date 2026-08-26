@@ -61,6 +61,22 @@ class Backend(Protocol):
     ) -> dict: ...
 
 
+#: Модели Whisper от крупной к мелкой. По этой лестнице расчёт спускается,
+#: когда видеопамяти не хватило: лучше распознать моделью поменьше, чем не
+#: распознать вовсе. Качество при этом падает, и об этом говорится вслух.
+MODEL_LADDER = ("large-v3", "large-v2", "large", "medium", "small", "base", "tiny")
+
+#: Признак того, что кончилась видеопамять. Torch сообщает об этом
+#: по-разному в зависимости от версии, поэтому смотрим и на тип, и на текст.
+_OUT_OF_MEMORY = ("out of memory", "cuda oom", "не хватает памяти")
+
+
+def is_out_of_memory(error: BaseException) -> bool:
+    return any(mark in str(error).lower() for mark in _OUT_OF_MEMORY) or type(
+        error
+    ).__name__ == "OutOfMemoryError"
+
+
 #: Сколько времени занимает каждый шаг — доли от общего, по наблюдениям.
 #: Точность тут недостижима: она зависит от записи, модели и видеокарты.
 #: Но даже грубая шкала честнее крутилки, по которой не понять, идёт работа
@@ -84,6 +100,14 @@ class Recognition:
     device: str = ""
     #: Какие шаги взяты из сохранённых файлов, а не посчитаны заново.
     reused: list[str] = field(default_factory=list)
+    #: Какой моделью и какой порцией распознавание прошло на самом деле.
+    #: Может отличаться от заказанного: при нехватке видеопамяти расчёт
+    #: спускается на модель поменьше, и знать об этом нужно — качество
+    #: расшифровки другое.
+    asr_model: str = ""
+    batch_size: int = 0
+    #: Что пришлось уступить. Пусто — прошло как заказано.
+    fallbacks: list[str] = field(default_factory=list)
 
 
 def free_vram(torch_module: Any | None = None) -> bool:
@@ -191,13 +215,7 @@ def recognize(
     logger.info("Распознавание: модель {}, устройство {}", settings.asr_model, device)
     raw = _step(
         cache, "transcription.json", result, progress, "transcribe",
-        lambda: backend.transcribe(
-            str(audio),
-            model=settings.asr_model,
-            language=settings.language,
-            batch_size=settings.batch_size,
-            device=device,
-        ),
+        lambda: _transcribe_with_fallback(backend, str(audio), settings, device, result),
     )
     result.language = raw.get("language") or settings.language
 
@@ -228,6 +246,78 @@ def recognize(
     result.segments = assigned.get("segments", [])
     logger.info("Готово: сегментов {}", len(result.segments))
     return result
+
+
+def _transcribe_with_fallback(
+    backend: Backend,
+    audio: str,
+    settings: Settings,
+    device: str,
+    result: Recognition,
+) -> dict:
+    """Распознаёт, уступая по мере нехватки видеопамяти.
+
+    Сначала уменьшается порция: она влияет на память сильнее всего, а на
+    качество не влияет вовсе — только на скорость. Когда уменьшать уже
+    некуда, расчёт спускается на модель поменьше. Это уже размен качества
+    на возможность закончить, и потому он записывается в результат и
+    говорится вслух: расшифровка, сделанная моделью tiny, — это другая
+    расшифровка, и человек должен знать, что получил её.
+
+    Заранее угадать, что поместится, нельзя: видеопамять делят и другие
+    программы, а длинная запись просит больше короткой.
+    """
+    ladder = _ladder_from(settings.asr_model)
+    last_error: BaseException | None = None
+
+    for model in ladder:
+        batch = max(1, settings.batch_size)
+        while batch >= 1:
+            try:
+                value = backend.transcribe(
+                    audio,
+                    model=model,
+                    language=settings.language,
+                    batch_size=batch,
+                    device=device,
+                )
+            except Exception as exc:
+                if not is_out_of_memory(exc):
+                    raise
+                last_error = exc
+                free_vram()
+                if batch > 1:
+                    batch = max(1, batch // 2)
+                    note = f"порция уменьшена до {batch}"
+                    logger.warning("Не хватило видеопамяти: {}", note)
+                    result.fallbacks.append(note)
+                    continue
+                break  # порцию уменьшать больше некуда — меняем модель
+
+            result.asr_model = model
+            result.batch_size = batch
+            if model != settings.asr_model:
+                note = f"модель {settings.asr_model} не поместилась, распознано моделью {model}"
+                logger.warning(note)
+                result.fallbacks.append(note)
+            return value
+
+    raise RecognitionError(
+        "Не хватило видеопамяти даже для самой мелкой модели. "
+        "Освободите её: закройте Ollama или задайте OLLAMA_KEEP_ALIVE=0, "
+        f"либо считайте на процессоре — device=cpu. Последняя ошибка: {last_error}"
+    )
+
+
+def _ladder_from(model: str) -> list[str]:
+    """Модели от заказанной и ниже.
+
+    Незнакомое имя — например, дообученная своя модель — пробуется первым, а
+    дальше идёт обычная лестница: вдруг не поместится именно она.
+    """
+    if model in MODEL_LADDER:
+        return list(MODEL_LADDER[MODEL_LADDER.index(model):])
+    return [model, *MODEL_LADDER[MODEL_LADDER.index("medium"):]]
 
 
 def _step(

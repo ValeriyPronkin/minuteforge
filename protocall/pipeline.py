@@ -97,7 +97,12 @@ def transcribe_meeting(
     logger.info(
         "Стенограмма: {} реплик, говорящих {}", len(blocks), len(Transcript(blocks).speakers)
     )
-    return Transcript(blocks)
+    transcript = Transcript(blocks)
+    # Уступки прикладываются к стенограмме: расшифровка, сделанная моделью
+    # поменьше, — другая расшифровка, и знать об этом нужно и в интерфейсе,
+    # и в командной строке.
+    transcript.notes = list(recognition.fallbacks)
+    return transcript
 
 
 def protocol_from_transcript(

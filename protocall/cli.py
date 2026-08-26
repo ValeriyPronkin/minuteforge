@@ -212,6 +212,8 @@ def command_recognize(args: argparse.Namespace) -> int:
     )
     path = save_transcript(transcript, Path(work_dir) / f"{args.source.stem}_segments.json")
 
+    for note in getattr(transcript, "notes", []):
+        print(f"  ВНИМАНИЕ: не хватило видеопамяти — {note}")
     print(f"Реплик: {len(transcript.blocks)}, говорящих: {len(transcript.speakers)}")
     print(f"Метки: {', '.join(transcript.speakers)}")
     print(f"Стенограмма: {path}")

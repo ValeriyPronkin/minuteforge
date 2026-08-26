@@ -256,6 +256,8 @@ st.write(
     f"Реплик: **{len(transcript.blocks)}**, говорящих: **{len(transcript.speakers)}**, "
     f"длительность: **{transcript.duration_min} мин**"
 )
+for note in getattr(transcript, "notes", []):
+    st.warning(f"Не хватило видеопамяти: {note}. Качество расшифровки будет ниже.")
 with st.expander("Стенограмма"):
     st.text(transcript.as_text(with_time=True))
 st.download_button(

@@ -17,11 +17,17 @@ import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol, Sequence
 
 from loguru import logger
 
 from .config import HF_TOKEN_ENV, Settings
+
+
+#: Закрытые модели, без согласия на условия которых диаризация не работает.
+#: Их две, и это неочевидно: вторая тянется как зависимость первой, а человек
+#: обычно подписывает только ту страницу, ссылку на которую ему дали.
+GATED_MODELS = ("pyannote/speaker-diarization-3.1", "pyannote/segmentation-3.0")
 
 
 class RecognitionError(RuntimeError):
@@ -238,6 +244,51 @@ class _WhisperX:  # pragma: no cover — требует моделей и вид
         sound = whisperx.load_audio(audio)
         diarized = pipeline(sound, min_speakers=speakers, max_speakers=speakers)
         return whisperx.assign_word_speakers(diarized, aligned)
+
+
+def check_model_access(
+    token: str | None,
+    *,
+    models: Sequence[str] = GATED_MODELS,
+    fetch: Callable[[str, str], Any] | None = None,
+) -> dict[str, str]:
+    """Пускают ли к закрытым моделям с этим токеном.
+
+    Возвращает ``{модель: причина отказа}``; пустая строка означает, что
+    доступ есть. Проверка занимает секунду и стоит того: иначе отказ
+    вскроется после сорока минут распознавания, на последнем шаге.
+
+    :param fetch: чем ходить в сеть. Вынесено параметром, чтобы проверять
+        разбор ответов, не обращаясь к HuggingFace.
+    """
+    if not token:
+        return {model: f"нет токена в {HF_TOKEN_ENV}" for model in models}
+
+    fetch = fetch or _http_head
+    result: dict[str, str] = {}
+    for model in models:
+        try:
+            fetch(f"https://huggingface.co/api/models/{model}", token)
+            result[model] = ""
+        except Exception as exc:  # сеть, отказ, что угодно — всё это «нельзя»
+            result[model] = _access_reason(exc)
+    return result
+
+
+def _access_reason(exc: Exception) -> str:
+    code = getattr(exc, "code", None)
+    if code in (401, 403):
+        return "условия модели не приняты либо токен без прав на чтение"
+    if code == 404:
+        return "модель не найдена: возможно, у вашей версии whisperx другая"
+    return str(exc)
+
+
+def _http_head(url: str, token: str) -> Any:
+    import urllib.request
+
+    request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    return urllib.request.urlopen(request, timeout=10)
 
 
 def segments_to_json(recognition: Recognition, path: str | Path) -> Path:

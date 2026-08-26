@@ -136,3 +136,57 @@ def test_segments_can_be_saved_for_a_machine_without_a_gpu(audio, with_token, tm
 
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved[0]["speaker"] == "SPEAKER_00"
+
+
+# ------------------------------------------------------- доступ к моделям
+
+class Denied(Exception):
+    def __init__(self, code):
+        super().__init__(f"HTTP {code}")
+        self.code = code
+
+
+def test_access_check_passes_when_both_models_open(with_token):
+    from protocall.transcribe import GATED_MODELS, check_model_access
+
+    asked = []
+    result = check_model_access("hf_test", fetch=lambda url, token: asked.append(url))
+    assert set(result.values()) == {""}
+    assert len(asked) == len(GATED_MODELS) == 2
+
+
+def test_access_check_names_the_model_that_is_closed():
+    """Моделей две, и человек обычно подписывает только одну — ту, ссылку на
+    которую ему дали. Вторая тянется как зависимость и молча ломает запуск."""
+    from protocall.transcribe import check_model_access
+
+    def fetch(url, token):
+        if "segmentation" in url:
+            raise Denied(403)
+
+    result = check_model_access("hf_test", fetch=fetch)
+    open_models = [m for m, why in result.items() if not why]
+    closed = {m: why for m, why in result.items() if why}
+
+    assert len(open_models) == 1
+    assert "segmentation-3.0" in list(closed)[0]
+    assert "условия" in list(closed.values())[0]
+
+
+def test_missing_token_is_reported_without_going_online():
+    from protocall.transcribe import check_model_access
+
+    result = check_model_access(
+        None, fetch=lambda url, token: pytest.fail("в сеть ходить незачем")
+    )
+    assert all(HF_TOKEN_ENV in why for why in result.values())
+
+
+def test_network_trouble_is_not_disguised_as_a_refusal():
+    """Отказ в доступе и отсутствие сети лечатся по-разному."""
+    from protocall.transcribe import check_model_access
+
+    result = check_model_access(
+        "hf_test", fetch=lambda url, token: (_ for _ in ()).throw(OSError("нет сети"))
+    )
+    assert all("нет сети" in why for why in result.values())

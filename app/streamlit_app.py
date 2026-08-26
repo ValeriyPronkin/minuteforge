@@ -28,7 +28,11 @@ from protocall.blocks import (  # noqa: E402
 from protocall.config import HF_TOKEN_ENV, Settings  # noqa: E402
 from protocall.llm import LLMClient  # noqa: E402
 from protocall.pipeline import Meeting, protocol_from_transcript, transcribe_meeting  # noqa: E402
-from protocall.transcribe import MissingToken, RecognitionError  # noqa: E402
+from protocall.transcribe import (  # noqa: E402
+    MissingToken,
+    RecognitionError,
+    check_model_access,
+)
 
 BASE = Settings.load(ROOT / "config.yaml")
 WORK_DIR = ROOT / "data" / "work"
@@ -48,6 +52,19 @@ with st.sidebar:
         "Видео или аудио", type=["mp4", "avi", "mov", "mkv", "wav", "m4a", "mp3"]
     )
     ready_segments = st.file_uploader("…либо готовая стенограмма (json)", type=["json"])
+
+    if st.button("Проверить доступ к моделям", width="stretch"):
+        # Секунда проверки против сорока минут распознавания, которое
+        # упрётся в отказ на последнем шаге.
+        access = check_model_access(BASE.hf_token)
+        for model, why in access.items():
+            st.success(f"{model}: доступ есть") if not why else st.error(f"{model}: {why}")
+        if any(access.values()):
+            st.caption(
+                "Условия принимаются на странице модели, на вкладке Model card: "
+                "прокрутите вниз до «Agree and access repository». Кнопка "
+                "«Use this model» — это подсказка с кодом, согласия она не даёт."
+            )
 
     st.header("Распознавание")
     asr_model = st.selectbox(

@@ -111,11 +111,19 @@ def recognize(
 
     token = settings.hf_token
     if diarize and not token:
+        # Сообщение длиннее обычного намеренно: сюда упирается каждый, кто
+        # запускает инструмент впервые, и почти никто в этот момент не идёт
+        # читать документацию. Порядок шагов тут неочевиден — согласие на
+        # условия важнее самого токена, без него он бесполезен.
         raise MissingToken(
             "Для разделения по говорящим нужен токен HuggingFace: модели "
-            f"pyannote закрытые. Положите его в переменную {HF_TOKEN_ENV} "
-            "(в файл настроек и тем более в код — нельзя) и примите условия "
-            "модели pyannote/speaker-diarization на huggingface.co."
+            "pyannote закрытые. Токен личный, у каждого свой — он привязан "
+            "к аккаунту и заменяет пароль.\n"
+            "1. Примите условия на huggingface.co/pyannote/speaker-diarization-3.1 "
+            "и huggingface.co/pyannote/segmentation-3.0 — нужны обе.\n"
+            "2. Создайте токен типа Read на huggingface.co/settings/tokens.\n"
+            f"3. Положите его в переменную окружения {HF_TOKEN_ENV}. "
+            "В файл настроек и тем более в код — нельзя."
         )
 
     backend = backend or _whisperx_backend()

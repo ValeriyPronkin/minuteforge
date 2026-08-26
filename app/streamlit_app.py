@@ -139,7 +139,11 @@ if uploaded is not None:
             ]
         except MissingToken as exc:
             st.error(str(exc))
-            st.caption(f"Токен кладётся в переменную окружения `{HF_TOKEN_ENV}`.")
+            st.caption(
+                "Токен нужен свой: он привязан к вашему аккаунту HuggingFace. "
+                f"Кладётся в переменную окружения `{HF_TOKEN_ENV}` — "
+                "подробнее в README, раздел «Токен HuggingFace»."
+            )
             st.stop()
         except RecognitionError as exc:
             st.error(str(exc))

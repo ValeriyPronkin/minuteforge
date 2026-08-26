@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
@@ -19,6 +20,7 @@ from loguru import logger
 from .blocks import UNKNOWN
 from .chunking import Chunk
 from .llm import LLMClient, LLMError
+from .progress import Progress, Step, report
 
 #: Что модель отвечает, когда поручений в куске нет. Совещание наполовину
 #: состоит из обсуждения, и «ничего не найдено» — нормальный ответ, а не сбой.
@@ -159,6 +161,7 @@ def extract_tasks(
     client: LLMClient,
     *,
     skip_failed: bool = True,
+    progress: Progress | None = None,
 ) -> list[Task]:
     """Проходит по кускам стенограммы и собирает поручения.
 
@@ -166,9 +169,18 @@ def extract_tasks(
         умолчанию — пропустить и идти дальше: терять весь час работы из-за
         одного сбоя хуже, чем недосчитаться поручений из одного фрагмента.
         Пропуск пишется в журнал, молча это не проходит.
+    :param progress: куда сообщать о ходе. Местная модель отвечает по
+        десятку секунд на фрагмент, и на длинном совещании это минуты
+        тишины, за которые человек успевает решить, что всё повисло.
     """
     collected: list[Task] = []
-    for chunk in chunks:
+    total = len(chunks) or 1
+
+    for position, chunk in enumerate(chunks, 1):
+        title = f"Фрагмент {chunk.index} из {chunk.total}"
+        report(progress, Step(name="chunk", title=title, share=(position - 1) / total))
+
+        started = time.perf_counter()
         system, user = build_prompt(chunk)
         try:
             reply = client.complete(system, user)
@@ -176,6 +188,13 @@ def extract_tasks(
             if not skip_failed:
                 raise
             logger.warning("Фрагмент {}/{} пропущен: {}", chunk.index, chunk.total, exc)
+            report(progress, Step(
+                name="chunk",
+                title=f"{title} — пропущен: {exc}",
+                done=True,
+                elapsed_s=round(time.perf_counter() - started, 1),
+                share=position / total,
+            ))
             continue
 
         found = parse_tasks(reply.text, chunk=chunk.index)
@@ -184,6 +203,13 @@ def extract_tasks(
             chunk.index, chunk.total, len(found), reply.elapsed_s,
         )
         collected.extend(found)
+        report(progress, Step(
+            name="chunk",
+            title=f"{title} — поручений {len(found)}",
+            done=True,
+            elapsed_s=round(time.perf_counter() - started, 1),
+            share=position / total,
+        ))
 
     return dedupe(collected)
 

@@ -28,6 +28,12 @@ from protocall.blocks import (  # noqa: E402
 )
 from protocall.config import HF_TOKEN_ENV, Settings  # noqa: E402
 from protocall.llm import LLMClient  # noqa: E402
+from protocall.people import (  # noqa: E402
+    merge_suggestions,
+    mentioned_people,
+    read_people,
+    suggest_speakers,
+)
 from protocall.pipeline import Meeting, protocol_from_transcript, transcribe_meeting  # noqa: E402
 from protocall.transcribe import (  # noqa: E402
     MissingToken,
@@ -69,6 +75,21 @@ with st.sidebar:
         "Видео или аудио", type=["mp4", "avi", "mov", "mkv", "wav", "m4a", "mp3"]
     )
     ready_segments = st.file_uploader("…либо готовая стенограмма (json)", type=["json"])
+
+    st.header("Документ")
+    roster_file = st.file_uploader(
+        "Список участников (csv или txt)",
+        type=["csv", "txt"],
+        help="ФИО и должности. Не заменяет число говорящих: в списке все "
+        "приглашённые, а голосов в записи обычно втрое меньше.",
+    )
+    template_file = st.file_uploader(
+        "Форма протокола (md или txt)",
+        type=["md", "txt"],
+        help="Ваша форма документа с местами вида {{date}}, {{tasks}}. "
+        "Без неё протокол собирается по встроенной разметке. "
+        "Образец — data/sample/protocol_template.md.",
+    )
 
     if st.button("Проверить доступ к моделям", **full_width()):
         # Секунда проверки против сорока минут распознавания, которое
@@ -238,16 +259,44 @@ st.caption(
     "фамилия под чужими словами."
 )
 
+roster = read_people(roster_file) if roster_file is not None else []
+heard = mentioned_people(transcript.as_text())
+people = merge_suggestions(roster, heard)
+guesses = suggest_speakers(transcript.blocks)
+
+if people:
+    source = []
+    if roster:
+        source.append(f"из списка — {len(roster)}")
+    if len(people) > len(roster):
+        source.append(f"названы в записи — {len(people) - len(roster)}")
+    st.caption("Кого удалось собрать: " + ", ".join(source) + ".")
+
+OTHER = "другое…"
+options = ["", *[person.full for person in people], OTHER]
+
 labels = [s for s in transcript.speakers if s != UNKNOWN]
 names: dict[str, str] = {}
 columns = st.columns(min(3, max(1, len(labels))))
 for index, label in enumerate(labels):
     with columns[index % len(columns)]:
         sample = next((b.text for b in transcript.blocks if b.speaker == label), "")
-        value = st.text_input(label, key=f"name_{label}", placeholder="Фамилия И.О.")
+        # Догадка ставится по умолчанию, но остаётся догадкой: человек видит
+        # её рядом с первой репликой и либо соглашается, либо правит.
+        guess = guesses.get(label)
+        default = options.index(guess.full) if guess and guess.full in options else 0
+        choice = st.selectbox(label, options, index=default, key=f"pick_{label}")
+        if choice == OTHER:
+            choice = st.text_input(
+                "Кто это", key=f"name_{label}", placeholder="Фамилия И.О.",
+                label_visibility="collapsed",
+            )
+        if guess and default:
+            st.caption("Подсказка: назван перед этой репликой")
         st.caption(f"«{sample[:70]}…»" if len(sample) > 70 else f"«{sample}»")
-        if value.strip():
-            names[label] = value.strip()
+        if choice and choice.strip():
+            # В протоколе под репликами нужна фамилия, а должность — в шапке.
+            names[label] = choice.split(",")[0].strip()
 
 # ---------------------------------------------------------------- шаг 3
 st.subheader("Шаг 3. Протокол")
@@ -256,16 +305,35 @@ left, right = st.columns(2)
 with left:
     title = st.text_input("Заголовок", "Протокол совещания")
     date = st.text_input("Дата и время", placeholder="05.06.2025, 11:00")
+    number = st.text_input("Номер протокола", placeholder="17")
 with right:
     place = st.text_input("Место", placeholder="Переговорная 3")
     chair = st.text_input("Председатель", placeholder="Фамилия И.О.")
+    secretary = st.text_input("Секретарь", placeholder="Фамилия И.О.")
 
 if st.button("Собрать протокол", type="primary"):
-    meeting = Meeting(title=title, date=date, place=place, chair=chair, names=names or None)
+    meeting = Meeting(
+        title=title, date=date, place=place, chair=chair,
+        secretary=secretary, number=number,
+        names=names or None, people=people or None,
+    )
     client = LLMClient(settings)
-    with st.spinner("Ищу поручения. Местная модель отвечает небыстро…"):
-        protocol = protocol_from_transcript(transcript, settings, meeting=meeting, client=client)
+
+    # Полоска и здесь: местная модель отвечает по десятку секунд на
+    # фрагмент, и на длинном совещании это минуты тишины.
+    bar = st.progress(0.0, text="Читаю стенограмму…")
+
+    def show(step) -> None:
+        bar.progress(step.share, text=step.title)
+
+    protocol = protocol_from_transcript(
+        transcript, settings, meeting=meeting, client=client, progress=show
+    )
+    bar.progress(1.0, text="Готово")
     st.session_state["protocol"] = protocol
+    st.session_state["template"] = (
+        template_file.getvalue().decode("utf-8-sig") if template_file is not None else None
+    )
 
 protocol = st.session_state.get("protocol")
 if protocol is not None:
@@ -280,17 +348,30 @@ if protocol is not None:
             "и не получили выдуманного адресата — смотрите отдельный раздел."
         )
 
-    st.markdown(protocol.as_markdown())
+    template = st.session_state.get("template")
+    document = protocol.render(template) if template else protocol.as_markdown()
+    if template:
+        st.caption("Документ собран по вашей форме.")
+    st.markdown(document if not template else f"```\n{document}\n```")
 
-    files = st.columns(2)
+    # Три файла, а не один: протокол подписывают, стенограмму держат как
+    # сырьё для проверки спорного места, таблицу ставят на контроль.
+    files = st.columns(3)
     files[0].download_button(
-        "Скачать протокол md",
-        protocol.as_markdown(with_transcript=True).encode("utf-8"),
+        "Скачать протокол",
+        document.encode("utf-8"),
         "protocol.md",
         "text/markdown",
         **full_width(),
     )
     files[1].download_button(
+        "Скачать стенограмму",
+        transcript.as_text(with_time=True).encode("utf-8"),
+        "transcript.txt",
+        "text/plain",
+        **full_width(),
+    )
+    files[2].download_button(
         "Скачать поручения csv",
         protocol.tasks_csv().encode("utf-8-sig"),
         "tasks.csv",

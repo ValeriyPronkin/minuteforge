@@ -179,3 +179,55 @@ def test_steps_are_cached_between_runs(audio, with_token, tmp_path):
 
     saved = json.loads((tmp_path / "segments.json").read_text(encoding="utf-8"))
     assert saved["segments"][0]["speaker"] == "SPEAKER_00"
+
+
+def test_transcript_is_saved_apart_from_the_protocol(tmp_path):
+    """Протокол — документ, который подписывают. Стенограмма — сырьё для
+    проверки спорного места. Подшитая внутрь, она превращает документ в
+    расшифровку на сорок страниц, которую никто не читает.
+    """
+    protocol = protocol_from_transcript(transcript(), Settings(), client=FakeClient())
+    paths = save(protocol, tmp_path)
+
+    document = paths["protocol"].read_text(encoding="utf-8")
+    assert "Начинаем" not in document, "стенограммы в протоколе быть не должно"
+    assert "Начинаем" in paths["transcript"].read_text(encoding="utf-8")
+
+
+def test_protocol_is_built_by_the_given_form(tmp_path):
+    """Форма протокола в каждой организации своя, и угадать её нельзя."""
+    template = tmp_path / "форма.md"
+    template.write_text(
+        "ПРОТОКОЛ № {{number}} от {{date}}\n"
+        "Председательствующий: {{chair}}\n"
+        "Секретарь: {{secretary}}\n"
+        "РЕШИЛИ:\n{{tasks}}\n",
+        encoding="utf-8",
+    )
+    protocol = protocol_from_transcript(
+        transcript(),
+        Settings(),
+        meeting=Meeting(date="05.06.2025", chair="Орлов В.П.", secretary="Ким С.А.", number="17"),
+        client=FakeClient(),
+    )
+    paths = save(protocol, tmp_path / "out", template=template)
+    document = paths["protocol"].read_text(encoding="utf-8")
+
+    assert document.startswith("ПРОТОКОЛ № 17 от 05.06.2025")
+    assert "Секретарь: Ким С.А." in document
+    assert "Сергей Ким: Подготовить план" in document
+
+
+def test_unknown_placeholder_is_left_for_a_human(tmp_path):
+    """Незаполненное место — не ошибка, а подсказка тому, кто дописывает
+    документ руками."""
+    template = tmp_path / "форма.md"
+    template.write_text("Гриф: {{гриф_секретности}}\nДата: {{date}}\n", encoding="utf-8")
+    protocol = protocol_from_transcript(
+        transcript(), Settings(), meeting=Meeting(date="05.06.2025"), client=FakeClient()
+    )
+    document = save(protocol, tmp_path / "out", template=template)["protocol"].read_text(
+        encoding="utf-8"
+    )
+    assert "{{гриф_секретности}}" in document
+    assert "Дата: 05.06.2025" in document

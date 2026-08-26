@@ -20,6 +20,7 @@ from .blocks import Transcript, blocks_from_segments, consolidate, rename_speake
 from .chunking import split_into_chunks
 from .config import Settings
 from .llm import LLMClient
+from .people import Person
 from .protocol import Protocol, build_protocol
 from .tasks import extract_tasks
 from .transcribe import (
@@ -48,11 +49,19 @@ class Meeting:
     date: str = ""
     place: str = ""
     chair: str = ""
+    #: Реквизиты протокола как документа. Распознавание их не даёт: их знает
+    #: тот, кто ведёт делопроизводство.
+    secretary: str = ""
+    number: str = ""
     #: Имена по меткам говорящих: ``{"SPEAKER_00": "Орлов В.П."}``.
     names: dict[str, str] | None = None
     #: Полный список участников. Если не задан, берётся из стенограммы —
     #: но тогда в нём не будет тех, кто присутствовал и промолчал.
     attendees: Sequence[str] | None = None
+    #: Список участников с должностями. Не заменяет число говорящих для
+    #: диаризации: в списке все приглашённые, а голосов в записи обычно
+    #: втрое меньше.
+    people: Sequence[Person] | None = None
 
 
 def transcribe_meeting(
@@ -97,6 +106,7 @@ def protocol_from_transcript(
     *,
     meeting: Meeting | None = None,
     client: LLMClient | None = None,
+    progress: Progress | None = None,
 ) -> Protocol:
     """Из стенограммы — протокол с поручениями.
 
@@ -120,7 +130,7 @@ def protocol_from_transcript(
     )
     logger.info("Стенограмма разбита на {} фрагментов", len(chunks))
 
-    tasks = extract_tasks(chunks, client)
+    tasks = extract_tasks(chunks, client, progress=progress)
     logger.info("Найдено поручений: {}", len(tasks))
 
     return build_protocol(
@@ -130,7 +140,10 @@ def protocol_from_transcript(
         date=meeting.date,
         place=meeting.place,
         chair=meeting.chair,
+        secretary=meeting.secretary,
+        number=meeting.number,
         attendees=meeting.attendees,
+        people=meeting.people,
     )
 
 
@@ -142,28 +155,62 @@ def process(
     backend: Backend | None = None,
     client: LLMClient | None = None,
     work_dir: str | Path | None = None,
+    progress: Progress | None = None,
 ) -> Protocol:
     """Полный путь: запись на входе, протокол на выходе."""
     settings = settings or Settings()
-    transcript = transcribe_meeting(source, settings, backend=backend, work_dir=work_dir)
-    return protocol_from_transcript(transcript, settings, meeting=meeting, client=client)
+    transcript = transcribe_meeting(
+        source, settings, backend=backend, work_dir=work_dir, progress=progress
+    )
+    return protocol_from_transcript(
+        transcript, settings, meeting=meeting, client=client, progress=progress
+    )
 
 
-def save(protocol: Protocol, out_dir: str | Path, *, stem: str = "protocol") -> dict[str, Path]:
-    """Сохраняет протокол и таблицу поручений.
+def save(
+    protocol: Protocol,
+    out_dir: str | Path,
+    *,
+    stem: str = "protocol",
+    template: str | Path | None = None,
+) -> dict[str, Path]:
+    """Сохраняет протокол, стенограмму и таблицу поручений.
 
-    Два файла, а не один: протокол читают, а таблицу разбирают по
-    исполнителям и ставят на контроль.
+    Три файла, а не один, и это не мелочь. Протокол — документ с заведённой
+    формой, его подписывают и рассылают. Стенограмма — сырьё, по которому
+    проверяют спорное место. Подшитая внутрь протокола, она превращает
+    документ в расшифровку на сорок страниц, которую никто не читает.
+
+    :param template: форма протокола. Задана — документ собирается по ней,
+        нет — по встроенной разметке. Своя форма есть в каждой организации,
+        и снаружи её не угадать.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    document = out_dir / f"{stem}.md"
-    document.write_text(protocol.as_markdown(with_transcript=True), encoding="utf-8")
+    if template is not None:
+        text = Path(template).read_text(encoding="utf-8-sig")
+        document_text = protocol.render(text)
+        suffix = Path(template).suffix or ".md"
+    else:
+        document_text = protocol.as_markdown()
+        suffix = ".md"
+
+    document = out_dir / f"{stem}{suffix}"
+    document.write_text(document_text, encoding="utf-8")
 
     table = out_dir / f"{stem}_tasks.csv"
     # BOM: без него Excel в русской локали открывает таблицу кракозябрами.
     table.write_text(protocol.tasks_csv(), encoding="utf-8-sig")
 
-    logger.info("Сохранено: {} и {}", document.name, table.name)
-    return {"protocol": document, "tasks": table}
+    saved = {"protocol": document, "tasks": table}
+
+    if protocol.transcript is not None:
+        transcript = out_dir / f"{stem}_transcript.txt"
+        transcript.write_text(
+            protocol.transcript.as_text(with_time=True), encoding="utf-8"
+        )
+        saved["transcript"] = transcript
+
+    logger.info("Сохранено: {}", ", ".join(path.name for path in saved.values()))
+    return saved

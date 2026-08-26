@@ -25,6 +25,7 @@ from loguru import logger
 from .blocks import Transcript, blocks_from_segments, consolidate
 from .config import Settings
 from .llm import LLMClient
+from .people import merge_suggestions, mentioned_people, read_people
 from .pipeline import Meeting, protocol_from_transcript, save, transcribe_meeting
 from .transcribe import GATED_MODELS, MissingToken, RecognitionError, check_model_access
 
@@ -79,6 +80,16 @@ def _add_meeting_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--date", default="", help="дата и время совещания")
     parser.add_argument("--place", default="")
     parser.add_argument("--chair", default="")
+    parser.add_argument("--secretary", default="", help="секретарь совещания")
+    parser.add_argument("--number", default="", help="номер протокола")
+    parser.add_argument(
+        "--people", type=Path, default=None,
+        help="список участников: csv или txt с ФИО и должностями",
+    )
+    parser.add_argument(
+        "--template", type=Path, default=None,
+        help="форма протокола с местами вида {{date}}; без неё — встроенная разметка",
+    )
     parser.add_argument(
         "--name",
         action="append",
@@ -172,6 +183,7 @@ def print_step(step) -> None:
     print(f"  [{step.share:>4.0%}] {step.title} — {mark}", flush=True)
 
 
+
 def command_recognize(args: argparse.Namespace) -> int:
     settings = settings_from(args)
     work_dir = args.out or args.source.parent
@@ -192,7 +204,7 @@ def command_protocol(args: argparse.Namespace) -> int:
     settings = settings_from(args)
     transcript = load_transcript(args.segments)
     protocol = _build(transcript, args, settings)
-    _report(protocol, save(protocol, args.out))
+    _report(protocol, save(protocol, args.out, template=args.template))
     return 0
 
 
@@ -202,20 +214,26 @@ def command_run(args: argparse.Namespace) -> int:
         args.source, settings, work_dir=args.out, progress=print_step
     )
     protocol = _build(transcript, args, settings)
-    _report(protocol, save(protocol, args.out))
+    _report(protocol, save(protocol, args.out, template=args.template))
     return 0
 
 
 def _build(transcript: Transcript, args: argparse.Namespace, settings: Settings):
+    roster = read_people(args.people) if args.people else []
+    people = merge_suggestions(roster, mentioned_people(transcript.as_text()))
     meeting = Meeting(
         title=args.title,
         date=args.date,
         place=args.place,
         chair=args.chair,
+        secretary=args.secretary,
+        number=args.number,
         names=parse_names(args.name) or None,
+        people=people or None,
     )
     return protocol_from_transcript(
-        transcript, settings, meeting=meeting, client=LLMClient(settings)
+        transcript, settings, meeting=meeting,
+        client=LLMClient(settings), progress=print_step,
     )
 
 
@@ -224,8 +242,9 @@ def _report(protocol, paths: dict[str, Path]) -> None:
     print(f"Поручений: {len(protocol.tasks)}, из них без исполнителя: {unclear}")
     if unclear:
         print("  Пункты без исполнителя не выброшены — см. раздел «Требуют уточнения».")
-    print(f"Протокол: {paths['protocol']}")
-    print(f"Поручения: {paths['tasks']}")
+    for label, key in (("Протокол", "protocol"), ("Стенограмма", "transcript"), ("Поручения", "tasks")):
+        if key in paths:
+            print(f"{label}: {paths[key]}")
 
 
 COMMANDS = {

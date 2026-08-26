@@ -16,6 +16,7 @@ from io import StringIO
 from typing import Sequence
 
 from .blocks import UNKNOWN, Transcript
+from .people import Person, find
 from .tasks import Task
 
 
@@ -30,7 +31,14 @@ class Protocol:
     date: str = ""
     place: str = ""
     chair: str = ""
+    #: Секретарь и номер — обязательные реквизиты протокола как документа.
+    #: Распознавание их не даёт и дать не может: их знает делопроизводитель.
+    secretary: str = ""
+    number: str = ""
     attendees: list[str] = field(default_factory=list)
+    #: Список участников с должностями, если он был. Отдельно от attendees:
+    #: в шапке протокола нужны должности, а в поручениях — только фамилии.
+    people: list[Person] = field(default_factory=list)
     tasks: list[Task] = field(default_factory=list)
     transcript: Transcript | None = None
 
@@ -55,15 +63,25 @@ class Protocol:
         lines = [f"# {self.title}", ""]
 
         head = [
+            ("Номер", self.number),
             ("Дата", self.date),
             ("Место", self.place),
             ("Председатель", self.chair),
+            ("Секретарь", self.secretary),
         ]
         for label, value in head:
             if value:
                 lines.append(f"**{label}:** {value}  ")
         if self.attendees:
-            lines.append(f"**Участники:** {', '.join(self.attendees)}  ")
+            # С должностями — списком: строкой через запятую «Иванов И.И.,
+            # начальник отдела, Петров П.П., главный специалист» читается
+            # как перечень из четырёх человек.
+            full = self.attendees_full
+            if any(" ," not in item and item != name for item, name in zip(full, self.attendees)):
+                lines.append("**Участники:**  ")
+                lines.extend(f"* {item}" for item in full)
+            else:
+                lines.append(f"**Участники:** {', '.join(self.attendees)}  ")
         if self.transcript is not None and self.transcript.duration_min:
             lines.append(f"**Длительность записи:** {self.transcript.duration_min} мин  ")
         lines.append("")
@@ -89,6 +107,56 @@ class Protocol:
 
         return "\n".join(lines).rstrip() + "\n"
 
+    def fields(self) -> dict[str, str]:
+        """Значения для подстановки в шаблон.
+
+        Пустое поле подставляется пустой строкой, а не пропускается: в
+        готовой форме документа у каждой строки своё место, и молча съесть
+        её нельзя — делопроизводитель должен увидеть, что реквизит не
+        заполнен, и вписать его руками.
+        """
+        return {
+            "title": self.title,
+            "number": self.number,
+            "date": self.date,
+            "place": self.place,
+            "chair": self.chair,
+            "secretary": self.secretary,
+            "attendees": "\n".join(f"{i}. {a}" for i, a in enumerate(self.attendees_full, 1)),
+            "attendees_line": ", ".join(self.attendees),
+            "duration": f"{self.transcript.duration_min} мин" if self.transcript else "",
+            "tasks": "\n".join(_task_lines(self.actionable)),
+            "unclear": "\n".join(f"- {t.what}" for t in self.needs_clarification),
+            "tasks_table": "\n".join(_task_table(self.actionable)),
+            "tasks_count": str(len(self.tasks)),
+        }
+
+    @property
+    def attendees_full(self) -> list[str]:
+        """Участники с должностями, если они известны."""
+        result = []
+        for name in self.attendees:
+            person = find(self.people, name)
+            result.append(person.full if person else name)
+        return result
+
+    def render(self, template: str) -> str:
+        """Заполняет шаблон протокола.
+
+        Форма протокола в каждой организации своя, и угадать её снаружи
+        нельзя: где-то нужен номер и гриф, где-то «СЛУШАЛИ — ВЫСТУПИЛИ —
+        РЕШИЛИ», где-то подписи двух человек. Поэтому форму приносит
+        пользователь, а инструмент только подставляет в неё то, что знает.
+
+        Неизвестное место в шаблоне остаётся как есть — это не ошибка, а
+        подсказка тому, кто будет дописывать документ руками.
+        """
+        result = template
+        for key, value in self.fields().items():
+            for placeholder in (f"{{{{{key}}}}}", f"{{{{ {key} }}}}"):
+                result = result.replace(placeholder, value)
+        return result
+
     def tasks_csv(self) -> str:
         """Поручения таблицей — то, что уходит в работу.
 
@@ -112,6 +180,9 @@ def build_protocol(
     place: str = "",
     chair: str = "",
     attendees: Sequence[str] | None = None,
+    people: Sequence[Person] | None = None,
+    secretary: str = "",
+    number: str = "",
 ) -> Protocol:
     """Собирает протокол.
 
@@ -130,10 +201,22 @@ def build_protocol(
         date=date,
         place=place,
         chair=chair,
+        secretary=secretary,
+        number=number,
         attendees=list(attendees or []),
+        people=list(people or []),
         tasks=list(tasks),
         transcript=transcript,
     )
+
+
+def _task_lines(tasks: Sequence[Task]) -> list[str]:
+    """Поручения списком — то, что идёт в раздел «Решили»."""
+    lines = []
+    for number, task in enumerate(tasks, 1):
+        due = f", срок — {task.due}" if task.due else ""
+        lines.append(f"{number}. {task.who}: {task.what}{due}.")
+    return lines
 
 
 def _task_table(tasks: Sequence[Task]) -> list[str]:

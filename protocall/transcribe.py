@@ -23,6 +23,7 @@ from typing import Any, Callable, Protocol, Sequence
 from loguru import logger
 
 from .config import HF_TOKEN_ENV, Settings
+from .progress import Progress, Step, report
 
 
 #: Закрытые модели, без согласия на условия которых диаризация не работает.
@@ -71,36 +72,6 @@ STEP_TITLES = {
     "align": "Выравниваю по времени",
     "diarize": "Разделяю по говорящим",
 }
-
-
-@dataclass
-class Step:
-    """Событие о ходе работы."""
-
-    name: str
-    #: Человеческое название — то, что видит человек.
-    title: str
-    #: Шаг закончен. До этого приходит событие о начале.
-    done: bool = False
-    #: Шаг не считался, а взят из сохранённого.
-    reused: bool = False
-    elapsed_s: float = 0.0
-    #: Доля выполненного, от 0 до 1.
-    share: float = 0.0
-
-
-#: Кому сообщать о ходе работы.
-Progress = Callable[[Step], None]
-
-
-def report(progress: Progress | None, step: Step) -> None:
-    """Сообщает о шаге, не роняя расчёт из-за ошибки в показе прогресса."""
-    if progress is None:
-        return
-    try:
-        progress(step)
-    except Exception as exc:  # рисование не должно ломать работу
-        logger.warning("Ошибка при показе прогресса: {}", exc)
 
 
 @dataclass

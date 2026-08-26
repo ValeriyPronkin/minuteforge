@@ -10,6 +10,7 @@ SPEAKER_00. Автоматически это не определить, а пр
 
 from __future__ import annotations
 
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -40,6 +41,22 @@ WORK_DIR = ROOT / "data" / "work"
 st.set_page_config(page_title="protocall", page_icon="📝", layout="wide")
 
 
+def full_width() -> dict:
+    """Как попросить кнопку растянуться на всю ширину.
+
+    В streamlit до версии 1.49 это ``use_container_width=True``, начиная с
+    неё — ``width="stretch"``. Смотрим на саму сигнатуру, а не на номер
+    версии: инструмент ставят в уже существующие окружения, где streamlit
+    какой есть, и падать из-за оформления кнопки он не должен.
+    """
+    parameters = inspect.signature(st.button).parameters
+    if "width" in parameters:
+        return {"width": "stretch"}
+    if "use_container_width" in parameters:
+        return {"use_container_width": True}
+    return {}
+
+
 def transcript_from_state() -> Transcript | None:
     segments = st.session_state.get("segments")
     return Transcript(consolidate(blocks_from_segments(segments))) if segments else None
@@ -53,7 +70,7 @@ with st.sidebar:
     )
     ready_segments = st.file_uploader("…либо готовая стенограмма (json)", type=["json"])
 
-    if st.button("Проверить доступ к моделям", width="stretch"):
+    if st.button("Проверить доступ к моделям", **full_width()):
         # Секунда проверки против сорока минут распознавания, которое
         # упрётся в отказ на последнем шаге.
         access = check_model_access(BASE.hf_token)
@@ -92,7 +109,7 @@ with st.sidebar:
         "что стенограмма не влезает в окно целиком: при большом окне фрагмент "
         "будет один, и повторов на границах не возникнет вовсе.",
     )
-    if st.button("Проверить связь", width="stretch"):
+    if st.button("Проверить связь", **full_width()):
         probe = LLMClient(Settings(llm_base_url=llm_url, llm_model=llm_model, llm_retries=0))
         st.success("Модель отвечает.") if probe.health() else st.error(
             "Модель не отвечает. Запущен ли Ollama или LM Studio?"
@@ -243,12 +260,12 @@ if protocol is not None:
         protocol.as_markdown(with_transcript=True).encode("utf-8"),
         "protocol.md",
         "text/markdown",
-        width="stretch",
+        **full_width(),
     )
     files[1].download_button(
         "Скачать поручения csv",
         protocol.tasks_csv().encode("utf-8-sig"),
         "tasks.csv",
         "text/csv",
-        width="stretch",
+        **full_width(),
     )

@@ -217,3 +217,23 @@ def test_unexpected_answer_shape_is_survived():
     """На этом адресе может отвечать вовсе не Ollama."""
     assert LLMClient(FAST, ModelsSession(FakeResponse({"что-то": "иное"}))).available_models() == []
     assert LLMClient(FAST, ModelsSession(FakeResponse(None, 404, "nope"))).available_models() == []
+
+
+def test_json_mode_is_asked_of_the_server():
+    session = FakeSession(answer('{"tasks": []}'))
+    LLMClient(FAST, session).complete("s", "u", json_mode=True)
+    assert session.calls[0]["json"]["response_format"] == {"type": "json_object"}
+
+
+def test_server_that_cannot_do_json_is_asked_again_without_it():
+    """Строгий JSON понимают не все серверы. Отказ — не беда: разбор умеет и
+    строки, просто мелкая модель справится хуже."""
+    session = FakeSession(
+        FakeResponse(status_code=400, text="response_format is not supported"),
+        answer("Поручение: Сделать"),
+    )
+    reply = LLMClient(FAST, session).complete("s", "u", json_mode=True)
+
+    assert reply.text == "Поручение: Сделать"
+    assert "response_format" in session.calls[0]["json"]
+    assert "response_format" not in session.calls[1]["json"], "второй раз просить незачем"

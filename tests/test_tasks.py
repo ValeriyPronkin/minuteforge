@@ -249,3 +249,48 @@ def test_unparsed_answer_is_kept_for_diagnosis():
     tasks = extract_tasks(chunks, client, answers=answers)
     assert tasks == []
     assert answers == ["Модель порассуждала о погоде и ничего не выписала."]
+
+
+# --------------------------------------------------------- строгий JSON
+
+def test_json_answer_is_understood():
+    """Мелкую модель уговорами формату не научить — её принуждает сервер."""
+    answer = (
+        '{"tasks": [{"what": "Подготовить план", "who": "Сергей Ким", "due": "до пятницы"},'
+        ' {"what": "Собрать справку", "who": "", "due": ""}]}'
+    )
+    tasks = parse_tasks(answer)
+    assert [t.what for t in tasks] == ["Подготовить план", "Собрать справку"]
+    assert tasks[0].due == "до пятницы"
+    assert tasks[1].who == ""
+
+
+def test_empty_json_list_means_nothing_found():
+    assert parse_tasks('{"tasks": []}') == []
+
+
+def test_json_wrapped_in_chatter_is_still_read():
+    """Даже под принуждением модель иногда добавляет слово от себя."""
+    tasks = parse_tasks('Вот результат: {"tasks": [{"what": "Направить письмо"}]} Готово!')
+    assert [t.what for t in tasks] == ["Направить письмо"]
+
+
+def test_json_prompt_forbids_retelling_the_transcript():
+    """Ровно то, чем мелкая модель и грешит: вместо ответа переписывает
+    стенограмму целиком."""
+    system, _ = build_prompt(Chunk([Block("И", "раз")], index=1, total=1), json_mode=True)
+    assert "не переписывай" in system.lower()
+    assert '{"tasks": []}' in system
+
+
+def test_json_example_in_the_prompt_parses_by_our_own_rules():
+    system, _ = build_prompt(Chunk([Block("И", "раз")], index=1, total=1), json_mode=True)
+    example = system.split("Ответ:", 1)[1]
+    tasks = parse_tasks(example)
+    assert len(tasks) == 2
+    assert tasks[1].who == "", "в примере показано поручение без исполнителя"
+
+
+def test_line_format_still_works_when_json_is_not_used():
+    """Сервер может не уметь строгий JSON — тогда остаётся разбор по строкам."""
+    assert parse_tasks("Поручение: Сделать\nКому: Иванов")[0].who == "Иванов"

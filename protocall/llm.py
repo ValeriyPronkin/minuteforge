@@ -89,7 +89,14 @@ class LLMClient:
     def endpoint(self) -> str:
         return f"{self.settings.llm_base_url.rstrip('/')}/chat/completions"
 
-    def complete(self, system: str, user: str, *, max_tokens: int | None = None) -> Reply:
+    def complete(
+        self,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int | None = None,
+        json_mode: bool = False,
+    ) -> Reply:
         """Задаёт модели один вопрос и возвращает ответ.
 
         Повтор делается только для сбоев, которые бывают временными:
@@ -106,6 +113,12 @@ class LLMClient:
             "max_tokens": max_tokens or self.settings.llm_max_tokens,
             "stream": False,
         }
+        if json_mode:
+            # Сервер принуждает модель выдавать разбираемый JSON, отсекая на
+            # каждом шаге всё, что его сломает. Для мелкой модели это
+            # решающая разница: уговорами формат от неё не добиться, она
+            # просто продолжает текст, который видит.
+            payload["response_format"] = {"type": "json_object"}
 
         last_error: Exception | None = None
         for attempt in range(1, self.settings.llm_retries + 2):
@@ -134,6 +147,17 @@ class LLMClient:
                 time.sleep(min(2 ** attempt, 10))
                 continue
             if response.status_code != 200:
+                if json_mode and response.status_code in (400, 422):
+                    # Строгий JSON понимают не все серверы. Отказ от него —
+                    # не беда: разбор ответа умеет и строки, просто мелкая
+                    # модель справится хуже.
+                    logger.info("Сервер не понял строгий JSON, повторяю без него")
+                    # Копией, а не правкой на месте: тот словарь уже ушёл в
+                    # запрос, и менять его задним числом — верный способ
+                    # однажды получить в журнале не то, что было отправлено.
+                    payload = {k: v for k, v in payload.items() if k != "response_format"}
+                    json_mode = False
+                    continue
                 raise LLMError(
                     f"Сервер модели вернул {response.status_code}: "
                     f"{_short(getattr(response, 'text', ''))}"

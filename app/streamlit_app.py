@@ -191,6 +191,14 @@ with st.sidebar:
         "что стенограмма не влезает в окно целиком: при большом окне фрагмент "
         "будет один, и повторов на границах не возникнет вовсе.",
     )
+    fine = st.checkbox(
+        "Дробить мельче",
+        value=False,
+        help="Фрагменты по 1200 токенов вместо расчётных. Мелкая модель на "
+        "длинном куске теряет поручения из середины: коротких фрагментов "
+        "больше, считать дольше, но находит она заметно больше.",
+    )
+
     if st.button("Проверить связь", **full_width()):
         probe = LLMClient(Settings(llm_base_url=llm_url, llm_model=llm_model, llm_retries=0))
         trouble = probe.diagnose()
@@ -206,7 +214,7 @@ settings = Settings(
     llm_base_url=llm_url,
     llm_model=llm_model,
     llm_context_tokens=int(context),
-    chunk_max_tokens=BASE.chunk_max_tokens,
+    chunk_max_tokens=1200 if fine else BASE.chunk_max_tokens,
     chunk_overlap_blocks=BASE.chunk_overlap_blocks,
     offline_models=BASE.offline_models,
 )

@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from dataclasses import dataclass
@@ -60,6 +61,32 @@ EXTRACT_SYSTEM = f"""Ты — секретарь совещания. Твоя з
 Кому: не указано
 Срок: не указан"""
 
+EXTRACT_SYSTEM_JSON = """Ты — секретарь совещания. Найди в стенограмме поручения.
+
+Поручение — это указание совершить действие: «подготовьте», «направьте»,
+«обеспечьте», «доложите». Мнение, вопрос и обсуждение поручениями не являются.
+
+Не пересказывай и не переписывай стенограмму. Выписывай только поручения.
+Не додумывай исполнителей и сроки: чего не прозвучало, оставь пустым.
+
+Ответь строго в таком виде, без единого слова вокруг:
+
+{"tasks": [{"what": "что сделать", "who": "кому", "due": "к какому сроку"}]}
+
+Если поручений нет, ответь: {"tasks": []}
+
+Пример.
+
+Стенограмма:
+Орлов В.П.: Сергей, подготовьте план работ и согласуйте со мной до пятницы.
+Сергей Ким: Принято.
+Орлов В.П.: Ещё нужна справка по инцидентам.
+Сергей Ким: А кто её собирает?
+Орлов В.П.: Решим отдельно.
+
+Ответ:
+{"tasks": [{"what": "Подготовить план работ и согласовать", "who": "Сергей Ким", "due": "до пятницы"}, {"what": "Собрать справку по инцидентам", "who": "", "due": ""}]}"""
+
 _FIELD_ALIASES = {
     "what": ("поручение", "задача", "что сделать", "task"),
     "who": ("кому", "исполнитель", "ответственный", "assignee"),
@@ -96,7 +123,7 @@ class Task:
         return "; ".join(parts)
 
 
-def build_prompt(chunk: Chunk) -> tuple[str, str]:
+def build_prompt(chunk: Chunk, *, json_mode: bool = False) -> tuple[str, str]:
     """Собирает пару «системный промпт, текст запроса» для куска.
 
     Модели сообщается, что она видит часть совещания, а не всё: иначе она
@@ -112,7 +139,8 @@ def build_prompt(chunk: Chunk) -> tuple[str, str]:
         if named:
             header += f"Участники фрагмента: {', '.join(named)}."
         header += "\n\n"
-    return EXTRACT_SYSTEM, f"{header}Стенограмма:\n{chunk.text}"
+    system = EXTRACT_SYSTEM_JSON if json_mode else EXTRACT_SYSTEM
+    return system, f"{header}Стенограмма:\n{chunk.text}"
 
 
 def parse_tasks(answer: str, *, chunk: int = 0) -> list[Task]:
@@ -126,6 +154,10 @@ def parse_tasks(answer: str, *, chunk: int = 0) -> list[Task]:
     text = (answer or "").strip()
     if not text:
         return []
+
+    from_json = _parse_json(text, chunk)
+    if from_json is not None:
+        return from_json
 
     tasks: list[Task] = []
     current: dict[str, str] = {}
@@ -198,12 +230,13 @@ def extract_tasks(
 
     for position, chunk in enumerate(chunks, 1):
         title = f"Фрагмент {chunk.index} из {chunk.total}"
+        json_mode = getattr(client, "settings", None) and client.settings.llm_json_mode
         report(progress, Step(name="chunk", title=title, share=(position - 1) / total))
 
         started = time.perf_counter()
-        system, user = build_prompt(chunk)
+        system, user = build_prompt(chunk, json_mode=bool(json_mode))
         try:
-            reply = client.complete(system, user)
+            reply = client.complete(system, user, json_mode=bool(json_mode))
         except LLMError as exc:
             if not skip_failed:
                 raise
@@ -263,6 +296,43 @@ def dedupe(tasks: Iterable[Task]) -> list[Task]:
             chunk=kept.chunk,
         )
     return [best[k] for k in order]
+
+
+def _parse_json(text: str, chunk: int) -> list[Task] | None:
+    """Разбирает ответ в JSON, если это он.
+
+    ``None`` означает «это не JSON» — тогда работает разбор по строкам.
+    Пустой список — «JSON разобран, поручений в нём нет»; это разные вещи,
+    и путать их нельзя.
+    """
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        body = json.loads(text[start : end + 1])
+    except ValueError:
+        return None
+    if not isinstance(body, dict):
+        return None
+
+    items = body.get("tasks")
+    if not isinstance(items, list):
+        return None
+
+    tasks = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        what = str(item.get("what") or "").strip()
+        if what:
+            tasks.append(Task(
+                what=what,
+                who=_clean(str(item.get("who") or "")),
+                due=_clean(str(item.get("due") or "")),
+                chunk=chunk,
+            ))
+    return tasks
 
 
 def _build(fields: dict[str, str], chunk: int) -> Task:

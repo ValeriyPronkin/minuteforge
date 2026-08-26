@@ -1,0 +1,27 @@
+# Распознавание речи. Ставится поверх requirements.txt и только на машину с
+# видеокартой NVIDIA.
+#
+# ВНИМАНИЕ, ГЛАВНАЯ ЛОВУШКА. Обычная команда
+#
+#     pip install torch
+#
+# ставит сборку БЕЗ CUDA. Всё будет работать и выглядеть исправным, но
+# считать будет процессор: час записи вместо пяти минут займёт несколько
+# часов. Поэтому torch ставится отдельно, с указанием версии CUDA:
+#
+#     pip install torch --index-url https://download.pytorch.org/whl/cu121
+#
+# Нужную команду под свою видеокарту возьмите на pytorch.org — там указывают
+# актуальный номер CUDA. Проверить, что вышло:
+#
+#     python -c "import torch; print(torch.cuda.is_available())"
+#
+# False означает, что распознавание пойдёт на процессоре.
+#
+# И ещё: ffmpeg — не питоновский пакет, он ставится системой:
+#   Windows: winget install ffmpeg
+#   macOS:   brew install ffmpeg
+#   Ubuntu:  sudo apt install ffmpeg
+
+torch>=2.1
+whisperx>=3.1

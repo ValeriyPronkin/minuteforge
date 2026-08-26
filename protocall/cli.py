@@ -27,6 +27,7 @@ from loguru import logger
 from .blocks import Transcript, blocks_from_segments, consolidate
 from .config import Settings
 from .llm import LLMClient
+from .audio import ffmpeg_available
 from .people import merge_suggestions, mentioned_people, read_people
 from .pipeline import Meeting, protocol_from_transcript, save, transcribe_meeting
 from .transcribe import GATED_MODELS, MissingToken, RecognitionError, check_model_access
@@ -170,9 +171,72 @@ def save_transcript(transcript: Transcript, path: Path) -> Path:
     return path
 
 
+def describe_environment() -> list[tuple[bool, str]]:
+    """Что установлено и увидит ли расчёт видеокарту.
+
+    Проверять это нужно до первого запуска, а не после: без CUDA всё
+    выглядит исправным и просто считает в двадцать раз дольше — человек
+    решает, что так и должно быть, и ждёт часами.
+    """
+    checks: list[tuple[bool, str]] = []
+
+    checks.append((
+        ffmpeg_available(),
+        "ffmpeg — им извлекается звук из видео"
+        if ffmpeg_available()
+        else "ffmpeg не найден: Windows — winget install ffmpeg, "
+        "macOS — brew install ffmpeg, Ubuntu — apt install ffmpeg",
+    ))
+
+    try:
+        import torch
+    except ImportError:
+        checks.append((
+            False,
+            "torch не установлен — распознавание работать не будет: "
+            "pip install -r requirements-asr.txt",
+        ))
+    else:
+        cuda = bool(torch.cuda.is_available())
+        if cuda:
+            checks.append((True, f"видеокарта видна: {torch.cuda.get_device_name(0)}"))
+        else:
+            checks.append((
+                False,
+                "torch не видит видеокарту — считать будет процессор, "
+                "час записи вместо минут. Чаще всего это сборка без CUDA: "
+                "pip install torch --index-url https://download.pytorch.org/whl/cu121",
+            ))
+
+    try:
+        import whisperx  # noqa: F401
+    except ImportError:
+        checks.append((False, "whisperx не установлен: pip install -r requirements-asr.txt"))
+    else:
+        checks.append((True, "whisperx на месте"))
+
+    return checks
+
+
 def command_check(args: argparse.Namespace) -> int:
     settings = settings_from(args)
     ok = True
+
+    # Проверка сама рассказывает о каждой находке понятным языком, и
+    # служебные предупреждения поверх этого только сбивают: одно и то же будет
+    # сказано дважды, второй раз — трассировкой про Connection refused.
+    logger.disable("protocall")
+    try:
+        return _run_checks(settings, ok)
+    finally:
+        logger.enable("protocall")
+
+
+def _run_checks(settings: Settings, ok: bool) -> int:
+
+    for good, note in describe_environment():
+        print(f"  {'ок  ' if good else 'НЕТ '} {note}")
+        ok = ok and good
 
     for model, why in check_model_access(settings.hf_token, models=GATED_MODELS).items():
         name = model.split("/")[-1]

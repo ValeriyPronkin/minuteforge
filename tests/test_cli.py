@@ -235,3 +235,51 @@ def test_compare_fails_when_nobody_answered(segments_file, monkeypatch, capsys):
     monkeypatch.setattr("protocall.cli.LLMClient", Client)
     assert main(["compare", str(segments_file), "--model", "mistral"]) == 1
     assert "Ни одна модель не ответила" in capsys.readouterr().err
+
+
+def test_check_reports_the_environment(monkeypatch, capsys):
+    """Без CUDA всё выглядит исправным и просто считает в двадцать раз
+    дольше — человек решает, что так и должно быть, и ждёт часами."""
+    from protocall.cli import describe_environment
+
+    monkeypatch.setattr("protocall.cli.ffmpeg_available", lambda: False)
+    notes = [note for _, note in describe_environment()]
+
+    assert any("ffmpeg не найден" in note for note in notes)
+    assert any("winget install ffmpeg" in note for note in notes), "надо сказать, как ставить"
+
+
+def test_check_explains_a_cpu_only_torch(monkeypatch, capsys):
+    """Самая частая ловушка: pip install torch ставит сборку без CUDA."""
+    import sys as _sys
+    import types
+
+    fake_torch = types.ModuleType("torch")
+    fake_torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+    monkeypatch.setitem(_sys.modules, "torch", fake_torch)
+    monkeypatch.setattr("protocall.cli.ffmpeg_available", lambda: True)
+
+    from protocall.cli import describe_environment
+
+    notes = [note for good, note in describe_environment() if not good]
+    assert any("download.pytorch.org" in note for note in notes)
+
+
+def test_check_returns_nonzero_when_something_is_missing(monkeypatch, capsys):
+    """Годится первой строкой пакетного скрипта: не настроено — не считаем."""
+    monkeypatch.setattr("protocall.cli.describe_environment", lambda: [(False, "нет ffmpeg")])
+    monkeypatch.setattr("protocall.cli.check_model_access", lambda *a, **kw: {})
+
+    class Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        def diagnose(self):
+            return ""
+
+        def available_models(self):
+            return []
+
+    monkeypatch.setattr("protocall.cli.LLMClient", Client)
+    assert main(["check"]) == 1
+    assert "нет ffmpeg" in capsys.readouterr().out

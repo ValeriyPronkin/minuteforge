@@ -1,0 +1,9 @@
+# Для запуска тестов. Ни видеокарта, ни модели, ни запущенная LLM тестам не
+# нужны: всё тяжёлое подменяется заглушками.
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+#   python -m pytest -q
+
+-r requirements.txt
+
+pytest>=8.0

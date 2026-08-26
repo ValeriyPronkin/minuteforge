@@ -13,6 +13,7 @@ from __future__ import annotations
 import inspect
 import json
 import sys
+import time
 from pathlib import Path
 
 import streamlit as st
@@ -61,6 +62,44 @@ def full_width() -> dict:
     if "use_container_width" in parameters:
         return {"use_container_width": True}
     return {}
+
+
+class Live:
+    """Показ хода работы: что идёт сейчас и что уже сделано.
+
+    Полоска отмечает границы шагов, а внутри шага двигать её нечем: ни
+    Whisper, ни модель не сообщают, сколько они прошли. Поэтому рядом с
+    полоской — крутящийся значок и время: они видно живут, пока шаг длится,
+    и человек не гадает, работает оно или повисло.
+    """
+
+    def __init__(self, title: str):
+        self.started = time.monotonic()
+        self.done: list[str] = []
+        self.bar = st.progress(0.0, text=title)
+        # st.status появился в streamlit 1.28; на более старых остаётся
+        # полоска, и это не повод отказываться от неё вовсе.
+        self.status = st.status(title, expanded=True) if hasattr(st, "status") else None
+
+    def __call__(self, step) -> None:
+        minutes, seconds = divmod(int(time.monotonic() - self.started), 60)
+        clock = f"{minutes}:{seconds:02d}"
+        if step.done:
+            mark = "взят готовым" if step.reused else f"{step.elapsed_s} с"
+            self.done.append(f"{step.title} — {mark}")
+            if self.status is not None:
+                self.status.write(f"{step.title} — {mark}")
+            self.bar.progress(step.share, text=f"Прошло {clock}")
+        else:
+            label = f"{step.title}… (идёт {clock})"
+            if self.status is not None:
+                self.status.update(label=label)
+            self.bar.progress(step.share, text=label)
+
+    def finish(self, label: str) -> None:
+        self.bar.progress(1.0, text=label)
+        if self.status is not None:
+            self.status.update(label=label, state="complete", expanded=False)
 
 
 def transcript_from_state() -> Transcript | None:
@@ -212,25 +251,12 @@ if uploaded is not None:
         WORK_DIR.mkdir(parents=True, exist_ok=True)
         source = WORK_DIR / uploaded.name
         source.write_bytes(uploaded.getbuffer())
-        # Полоска по шагам, а не крутилка: на часовой записи человек иначе
-        # сидит и гадает, идёт работа или всё повисло. Точной шкалы тут быть
-        # не может — WhisperX не сообщает, сколько минут записи он прошёл, —
-        # но видеть, какой шаг идёт и сколько занял предыдущий, уже достаточно.
-        bar = st.progress(0.0, text="Готовлюсь…")
-        done_steps: list[str] = []
-
-        def show(step) -> None:
-            if step.done:
-                mark = "взят готовым" if step.reused else f"{step.elapsed_s} с"
-                done_steps.append(f"{step.title} — {mark}")
-            text = " · ".join([*done_steps, f"**{step.title}…**"]) if not step.done else " · ".join(done_steps)
-            bar.progress(step.share, text=text or step.title)
-
+        live = Live("Готовлюсь…")
         try:
             transcript = transcribe_meeting(
-                source, settings, work_dir=WORK_DIR, progress=show
+                source, settings, work_dir=WORK_DIR, progress=live
             )
-            bar.progress(1.0, text=" · ".join(done_steps) or "Готово")
+            live.finish("Распознавание закончено")
             st.session_state["segments"] = [
                 {"speaker": b.speaker, "text": b.text, "start": b.start, "end": b.end}
                 for b in transcript.blocks
@@ -336,17 +362,13 @@ if st.button("Собрать протокол", type="primary"):
     )
     client = LLMClient(settings)
 
-    # Полоска и здесь: местная модель отвечает по десятку секунд на
-    # фрагмент, и на длинном совещании это минуты тишины.
-    bar = st.progress(0.0, text="Читаю стенограмму…")
-
-    def show(step) -> None:
-        bar.progress(step.share, text=step.title)
-
+    # Здесь так же: модель отвечает по десятку секунд на фрагмент, и на
+    # длинном совещании это минуты тишины.
+    live = Live("Читаю стенограмму…")
     protocol = protocol_from_transcript(
-        transcript, settings, meeting=meeting, client=client, progress=show
+        transcript, settings, meeting=meeting, client=client, progress=live
     )
-    bar.progress(1.0, text="Готово")
+    live.finish("Протокол собран")
     st.session_state["protocol"] = protocol
     st.session_state["template"] = (
         template_file.getvalue().decode("utf-8-sig") if template_file is not None else None

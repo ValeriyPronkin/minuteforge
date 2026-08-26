@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 import time
@@ -83,6 +84,37 @@ class Recognition:
     device: str = ""
     #: Какие шаги взяты из сохранённых файлов, а не посчитаны заново.
     reused: list[str] = field(default_factory=list)
+
+
+def free_vram(torch_module: Any | None = None) -> bool:
+    """Возвращает видеопамять, занятую предыдущим шагом.
+
+    Torch не отдаёт память сразу: он держит её в своём распределителе, чтобы
+    не просить у драйвера заново. Обычно это правильно, но здесь шаги идут
+    один за другим и каждый грузит свою модель — распознавание, выравнивание,
+    диаризацию. На карте с 8 ГБ они втроём не помещаются, и без явной чистки
+    третий шаг падает с нехваткой памяти на записи, которую первые два
+    прошли без запинки.
+
+    Возвращает True, если чистка была: без видеокарты и без torch делать
+    нечего, но и ошибкой это не является.
+    """
+    gc.collect()
+    module = torch_module
+    if module is None:
+        try:
+            import torch as module  # noqa: PLC0415
+        except ImportError:
+            return False
+    try:
+        if not module.cuda.is_available():
+            return False
+        module.cuda.empty_cache()
+    except Exception as exc:  # чистка памяти не повод ронять расчёт
+        logger.warning("Не удалось освободить видеопамять: {}", exc)
+        return False
+    logger.debug("Видеопамять освобождена")
+    return True
 
 
 def resolve_device(requested: str, cuda_available: bool | None = None) -> str:
@@ -230,6 +262,11 @@ def _step(
                 json.dumps(value, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
             )
 
+    if not reused:
+        # Именно здесь, а не в конце работы: следующий шаг грузит свою
+        # модель, и память ему нужна до того, как он начнёт.
+        free_vram()
+
     report(progress, Step(
         name=key,
         title=title,
@@ -283,14 +320,25 @@ class _WhisperX:  # pragma: no cover — требует моделей и вид
 
         asr = whisperx.load_model(model, device, language=language)
         sound = whisperx.load_audio(audio)
-        return asr.transcribe(sound, batch_size=batch_size)
+        try:
+            return asr.transcribe(sound, batch_size=batch_size)
+        finally:
+            # Модель больше не нужна, а следующему шагу нужна её память.
+            del asr
+            free_vram()
 
     def align(self, segments: list[dict], *, language: str, audio: str, device: str) -> dict:
         import whisperx
 
         model, metadata = whisperx.load_align_model(language_code=language, device=device)
         sound = whisperx.load_audio(audio)
-        return whisperx.align(segments, model, metadata, sound, device, return_char_alignments=False)
+        try:
+            return whisperx.align(
+                segments, model, metadata, sound, device, return_char_alignments=False
+            )
+        finally:
+            del model, metadata
+            free_vram()
 
     def diarize(
         self, audio: str, aligned: dict, *, token: str, speakers: int | None, device: str
@@ -299,8 +347,12 @@ class _WhisperX:  # pragma: no cover — требует моделей и вид
 
         pipeline = whisperx.diarize.DiarizationPipeline(use_auth_token=token, device=device)
         sound = whisperx.load_audio(audio)
-        diarized = pipeline(sound, min_speakers=speakers, max_speakers=speakers)
-        return whisperx.assign_word_speakers(diarized, aligned)
+        try:
+            diarized = pipeline(sound, min_speakers=speakers, max_speakers=speakers)
+            return whisperx.assign_word_speakers(diarized, aligned)
+        finally:
+            del pipeline
+            free_vram()
 
 
 def check_model_access(

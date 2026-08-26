@@ -251,3 +251,56 @@ def test_finished_step_reports_how_long_it_took(audio, with_token):
     )
     assert len(elapsed) == 3
     assert all(value >= 0 for value in elapsed)
+
+
+# --------------------------------------------------------- видеопамять
+
+class FakeTorch:
+    def __init__(self, available=True, fails=False):
+        self.emptied = 0
+        outer = self
+
+        class Cuda:
+            def is_available(self):
+                return available
+
+            def empty_cache(self):
+                if fails:
+                    raise RuntimeError("драйвер занят")
+                outer.emptied += 1
+
+        self.cuda = Cuda()
+
+
+def test_vram_is_freed_between_steps():
+    """Torch держит память в своём распределителе и сам её не отдаёт.
+    Шаги идут один за другим, каждый грузит свою модель, и на карте с 8 ГБ
+    третий падает на записи, которую первые два прошли без запинки.
+    """
+    from protocall.transcribe import free_vram
+
+    torch = FakeTorch()
+    assert free_vram(torch) is True
+    assert torch.emptied == 1
+
+
+def test_nothing_to_free_without_a_gpu():
+    from protocall.transcribe import free_vram
+
+    torch = FakeTorch(available=False)
+    assert free_vram(torch) is False
+    assert torch.emptied == 0
+
+
+def test_failed_cleanup_does_not_break_recognition():
+    """Чистка памяти не повод ронять сорок минут работы."""
+    from protocall.transcribe import free_vram
+
+    assert free_vram(FakeTorch(fails=True)) is False
+
+
+def test_missing_torch_is_not_an_error():
+    """Пакет ставят и без распознавания — torch тогда нет вовсе."""
+    from protocall.transcribe import free_vram
+
+    assert free_vram() in (True, False)

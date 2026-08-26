@@ -119,3 +119,34 @@ def test_unknown_is_not_listed_among_attendees():
     protocol = build_protocol(TASKS, with_unknown)
     assert protocol.attendees == ["Иванов"]
     assert "UNKNOWN" in protocol.as_markdown(with_transcript=True)
+
+
+def test_line_after_the_attendee_list_is_not_glued_to_it():
+    """Без пустой строки разметка приклеивает следующую строку к последнему
+    участнику, и длительность записи оказывается его должностью."""
+    from protocall.people import Person
+
+    protocol = Protocol(
+        tasks=TASKS,
+        attendees=["Иванов И.И.", "SPEAKER_01"],
+        people=[Person("Иванов И.И.", "начальник отдела")],
+        transcript=transcript(),
+    )
+    lines = protocol.as_markdown().splitlines()
+    last_attendee = max(i for i, line in enumerate(lines) if line.startswith("* "))
+    assert lines[last_attendee + 1].strip() == "", "после списка нужна пустая строка"
+    assert "Длительность записи" in "\n".join(lines[last_attendee:])
+
+
+def test_mixed_named_and_unnamed_attendees_are_all_shown():
+    """Часть меток осталась без имени — это нормально, но потерять их нельзя."""
+    from protocall.people import Person
+
+    protocol = Protocol(
+        attendees=["SPEAKER_02", "Семенов А.В.", "SPEAKER_01"],
+        people=[Person("Семенов А.В.", "первый замминистр")],
+    )
+    text = protocol.as_markdown()
+    assert "* SPEAKER_02" in text
+    assert "* Семенов А.В., первый замминистр" in text
+    assert "* SPEAKER_01" in text

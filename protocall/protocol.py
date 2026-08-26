@@ -80,9 +80,14 @@ class Protocol:
             # начальник отдела, Петров П.П., главный специалист» читается
             # как перечень из четырёх человек.
             full = self.attendees_full
-            if any(" ," not in item and item != name for item, name in zip(full, self.attendees)):
+            if any(item != name for item, name in zip(full, self.attendees)):
                 lines.append("**Участники:**  ")
+                lines.append("")
                 lines.extend(f"* {item}" for item in full)
+                # Пустая строка после списка обязательна: без неё разметка
+                # приклеивает следующую строку к последнему участнику, и
+                # длительность записи оказывается его должностью.
+                lines.append("")
             else:
                 lines.append(f"**Участники:** {', '.join(self.attendees)}  ")
         if self.transcript is not None and self.transcript.duration_min:

@@ -282,3 +282,13 @@ def test_server_without_schema_support_falls_back_by_one_step():
 
     assert session.calls[0]["json"]["response_format"]["type"] == "json_schema"
     assert session.calls[1]["json"]["response_format"]["type"] == "json_object"
+
+
+def test_truncated_answer_is_marked():
+    """«Ответ обрезан» и «модель ничего не нашла» — разные беды, и лечатся
+    они разным."""
+    cut = FakeResponse({
+        "choices": [{"message": {"content": '{"tasks": [{"what": "Подгот'}, "finish_reason": "length"}]
+    })
+    assert LLMClient(FAST, FakeSession(cut)).complete("s", "u").truncated is True
+    assert LLMClient(FAST, FakeSession(answer("готово"))).complete("s", "u").truncated is False

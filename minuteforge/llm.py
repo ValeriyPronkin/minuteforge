@@ -63,6 +63,10 @@ class Reply:
     #: Сколько секунд занял запрос. Нужно не для красоты: по этому числу
     #: видно, что модель считает на процессоре вместо видеокарты.
     elapsed_s: float = 0.0
+    #: Ответ упёрся в предел длины и оборван на полуслове. Отличать это от
+    #: «модель ничего не нашла» обязательно: причины разные, и лечатся они
+    #: разным.
+    truncated: bool = False
 
 
 class LLMClient:
@@ -271,8 +275,10 @@ def _parse(response: Any, elapsed: float) -> Reply:
         ) from exc
 
     usage = body.get("usage") or {}
+    finish = (body.get("choices") or [{}])[0].get("finish_reason")
     return Reply(
         text=(text or "").strip(),
+        truncated=finish == "length",
         prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
         completion_tokens=int(usage.get("completion_tokens", 0) or 0),
         elapsed_s=round(elapsed, 2),

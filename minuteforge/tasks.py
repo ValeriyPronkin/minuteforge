@@ -434,6 +434,13 @@ def extract_tasks(
         parsed = parse_tasks(reply.text, chunk=chunk.index)
         found = _keep_sound(parsed, chunk.text, corpus or chunk.text)
 
+        if reply.truncated:
+            logger.warning(
+                "Фрагмент {}: ответ обрезан по длине, спасено поручений {}. "
+                "Помогает больший llm_max_tokens или фрагменты помельче.",
+                chunk.index, len(parsed),
+            )
+
         # Модель ответила по-английски, и от фрагмента ничего не осталось.
         # Просьба в промпте её не удержала, но повтор с требованием в самом
         # конце запроса — обычно да: последнее указание весит больше всего.
@@ -551,7 +558,9 @@ def _parse_json(text: str, chunk: int) -> list[Task] | None:
     try:
         body = json.loads(text[start : end + 1])
     except ValueError:
-        return None
+        body = _salvage(text[start:])
+        if body is None:
+            return None
     if not isinstance(body, dict):
         return None
 
@@ -572,6 +581,25 @@ def _parse_json(text: str, chunk: int) -> list[Task] | None:
                 chunk=chunk,
             ))
     return tasks
+
+
+def _salvage(text: str) -> dict | None:
+    """Собирает поручения из оборванного ответа.
+
+    Модель упирается в предел длины и обрывается на полуслове: JSON не
+    закрыт, и целиком он не разбирается. Но поручения, успевшие уместиться,
+    целы — терять их вместе с последним, недописанным, обидно: это минута
+    работы модели, выброшенная из-за одной скобки.
+    """
+    items = []
+    for match in re.finditer(r"\{[^{}]*\}", text):
+        try:
+            item = json.loads(match.group(0))
+        except ValueError:
+            continue
+        if isinstance(item, dict) and item.get("what"):
+            items.append(item)
+    return {"tasks": items} if items else None
 
 
 def _build(fields: dict[str, str], chunk: int) -> Task:

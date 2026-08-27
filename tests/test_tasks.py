@@ -461,3 +461,24 @@ def test_unreadable_prompt_file_falls_back_to_the_built_in():
         prompt_file = "/такого/файла/нет.txt"
 
     assert _own_prompt(Settings()) == ""
+
+
+def test_truncated_answer_keeps_what_fitted():
+    """Модель упирается в предел длины и обрывается на полуслове. Поручения,
+    успевшие уместиться, целы — терять их из-за одной незакрытой скобки
+    значит выбрасывать минуту работы модели.
+    """
+    cut = (
+        '{"tasks": [ {"what": "Проанализировать невыбранные лимиты", "who": "", "due": ""}, '
+        '{"what": "Направить письмо в министерство", "who": "Ким С.А.", "due": "сегодня"}, '
+        '{"what": "Подготовить справку по инци'
+    )
+    tasks = parse_tasks(cut)
+    assert [t.what for t in tasks] == [
+        "Проанализировать невыбранные лимиты",
+        "Направить письмо в министерство",
+    ]
+
+
+def test_hopelessly_broken_answer_is_not_guessed():
+    assert parse_tasks('{"tasks": [ {"wha') == []

@@ -396,3 +396,13 @@ def test_custom_model_name_is_tried_first():
     assert _ladder_from("наша-дообученная")[0] == "наша-дообученная"
     assert _ladder_from("medium")[0] == "medium"
     assert "tiny" in _ladder_from("medium")
+
+
+def test_cpu_counts_in_int8_not_float16():
+    """WhisperX по умолчанию просит float16, а на процессоре такого счёта
+    нет: библиотека переходит на float32 — вдвое больше памяти и заметно
+    медленнее. Машин без видеокарты это касается напрямую."""
+    from minuteforge.transcribe import compute_type_for
+
+    assert compute_type_for("cpu") == "int8"
+    assert compute_type_for("cuda") == "float16"

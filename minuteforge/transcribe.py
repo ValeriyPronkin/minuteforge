@@ -156,9 +156,22 @@ def resolve_device(requested: str, cuda_available: bool | None = None) -> str:
     if device == "cpu":
         logger.warning(
             "Видеокарта не найдена, распознавание пойдёт на процессоре — "
-            "это в разы дольше."
+            "это в разы дольше. Двухчасовую запись целиком лучше не брать: "
+            "модель small вместо medium и временной интервал на нужный кусок "
+            "дают разницу в часы."
         )
     return device
+
+
+def compute_type_for(device: str) -> str:
+    """В каких числах считать.
+
+    WhisperX по умолчанию просит float16 — на видеокарте это правильно, а на
+    процессоре такого счёта нет: библиотека молча переходит на float32, вдвое
+    больше памяти и заметно медленнее. На процессоре считают в int8, и
+    разборчивость от этого страдает мало, а время — в разы.
+    """
+    return "float16" if device == "cuda" else "int8"
 
 
 def recognize(
@@ -408,7 +421,9 @@ class _WhisperX:  # pragma: no cover — требует моделей и вид
     def transcribe(self, audio: str, *, model: str, language: str, batch_size: int, device: str) -> dict:
         import whisperx
 
-        asr = whisperx.load_model(model, device, language=language)
+        asr = whisperx.load_model(
+            model, device, language=language, compute_type=compute_type_for(device)
+        )
         sound = whisperx.load_audio(audio)
         try:
             return asr.transcribe(sound, batch_size=batch_size)

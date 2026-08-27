@@ -275,6 +275,13 @@ def _run_checks(settings: Settings, ok: bool) -> int:
         ok = False
     elif limit:
         print(f"  ок   предел сервера: {limit} токенов")
+    elif window:
+        print(
+            f"  ?    сервер не сообщает свой предел (num_ctx). По умолчанию "
+            f"Ollama берёт 2048–4096 и молча отрезает остальное, а фрагмент у "
+            f"нас {settings.chunk_budget}.\n"
+            f"       Задайте предел явно: PARAMETER num_ctx 8192 в Modelfile."
+        )
 
     return 0 if ok else 1
 

@@ -314,3 +314,24 @@ def test_missing_context_info_is_not_an_error():
     assert LLMClient(
         FAST, FakeSession(FakeResponse(None, 404, "nope"))
     ).context_window() == (None, None)
+
+
+def test_show_request_carries_both_field_names():
+    """У Ollama менялось имя поля: старые версии на новое отвечают отказом."""
+    session = FakeSession(FakeResponse({"model_info": {"llama.context_length": 8192}}))
+    LLMClient(FAST, session).context_window()
+
+    sent = session.calls[0]["json"]
+    assert sent["model"] == sent["name"] == "mistral"
+
+
+def test_undeclared_limit_is_reported_as_unknown():
+    """num_ctx виден, только если задан явно. У обычной модели его в ответе
+    нет, а предел действует — и путать «неизвестен» с «нет предела» нельзя."""
+    show = FakeResponse({
+        "model_info": {"llama.context_length": 32768},
+        "parameters": 'stop "[INST]"',
+    })
+    window, limit = LLMClient(FAST, FakeSession(show)).context_window()
+    assert window == 32768
+    assert limit is None

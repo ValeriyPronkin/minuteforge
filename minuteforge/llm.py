@@ -240,7 +240,11 @@ class LLMClient:
         root = self.base_url.rsplit("/v1", 1)[0]
         try:
             response = self._session.post(
-                f"{root}/api/show", json={"name": self.settings.llm_model}, timeout=10
+                f"{root}/api/show",
+                # И «model», и «name»: у Ollama менялось имя поля, а старые
+                # версии на новое отвечают отказом, и наоборот.
+                json={"model": self.settings.llm_model, "name": self.settings.llm_model},
+                timeout=10,
             )
             if getattr(response, "status_code", 0) != 200:
                 return None, None
@@ -256,6 +260,11 @@ class LLMClient:
             None,
         )
 
+        # num_ctx виден, только если его задали явно при создании модели. У
+        # обычной, скачанной как есть, его в ответе нет — а предел всё равно
+        # действует, просто он берётся из умолчания сервера. Отличать «предел
+        # такой-то» от «предел неизвестен» обязательно: во втором случае
+        # человеку надо не менять окно наугад, а задать num_ctx самому.
         limit = None
         parameters = body.get("parameters") or ""
         match = re.search(r"num_ctx\s+(\d+)", str(parameters))

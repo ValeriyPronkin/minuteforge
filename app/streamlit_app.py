@@ -209,29 +209,29 @@ with st.sidebar:
     )
 
     st.header("Модель для поручений")
-    llm_url = st.text_input(
-        "Адрес", BASE.llm_base_url,
-        help="Адрес сервера модели: Ollama — 11434, LM Studio — 1234. "
-        "Это не страница: открыв его в браузере, вы увидите 404, и это "
-        "нормально. Проверять надо по http://localhost:11434 — там ответит "
-        "«Ollama is running».",
-    )
 
-    # Спрашиваем у сервера, что на нём есть: вспоминать точное написание
-    # «qwen2.5:14b» человек не обязан, а сервер на опечатку отвечает сухим
-    # отказом. Не ответил — остаётся поле для ввода руками.
-    installed = LLMClient(Settings(llm_base_url=llm_url)).available_models()
+    # Адрес спрятан намеренно: когда сервер отвечает, список моделей внизу и
+    # есть доказательство связи, а поле с localhost только занимает место.
+    # Значение читается из состояния до отрисовки поля — иначе спросить
+    # сервер по новому адресу вышло бы только со второго раза.
+    address = st.session_state.get("llm_url", BASE.llm_base_url)
+    installed = LLMClient(Settings(llm_base_url=address)).available_models()
+
     if installed:
         default = installed.index(BASE.llm_model) if BASE.llm_model in installed else 0
         llm_model = st.selectbox("Модель", installed, index=default)
         st.caption(
             "Для извлечения поручений семимиллиардные модели слабоваты — "
             "недобирают половину. Заметно лучше qwen2.5:14b, если хватает "
-            "видеопамяти (нужно около 10 ГБ), либо llama3.1:8b."
+            "видеопамяти (около 10 ГБ), либо llama3.1:8b."
         )
     else:
+        st.error(
+            f"Сервер модели не отвечает по адресу {address}. "
+            "Запущен ли Ollama или LM Studio?"
+        )
         llm_model = st.text_input("Модель", BASE.llm_model)
-        st.caption("Список моделей получить не удалось — впишите имя руками.")
+
     context = st.select_slider(
         "Окно модели, токенов",
         options=[4096, 8192, 16384, 32768, 131072, 1_000_000],
@@ -248,13 +248,26 @@ with st.sidebar:
         "больше, считать дольше, но находит она заметно больше.",
     )
 
-    if st.button("Проверить связь", **full_width()):
-        probe = LLMClient(Settings(llm_base_url=llm_url, llm_model=llm_model, llm_retries=0))
-        trouble = probe.diagnose()
-        if not trouble:
-            st.success(f"Модель «{llm_model}» отвечает.")
-        else:
-            st.error(trouble)
+    # Раскрыт, когда связи нет: чинить придётся именно здесь.
+    with st.expander("Адрес сервера", expanded=not installed):
+        st.text_input(
+            "Адрес", address, key="llm_url",
+            help="Ollama — 11434, LM Studio — 1234. Это корень API, а не "
+            "страница: в браузере по нему будет 404, и это нормально. Живость "
+            "сервера проверяется по http://localhost:11434 — ответит "
+            "«Ollama is running».",
+        )
+        if st.button("Проверить связь", **full_width()):
+            probe = LLMClient(
+                Settings(llm_base_url=address, llm_model=llm_model, llm_retries=0)
+            )
+            trouble = probe.diagnose()
+            if not trouble:
+                st.success(f"Модель «{llm_model}» отвечает.")
+            else:
+                st.error(trouble)
+
+    llm_url = st.session_state.get("llm_url", address)
 
 settings = Settings(
     asr_model=asr_model,

@@ -11,8 +11,10 @@ from minuteforge.pipeline import (
     process,
     protocol_from_transcript,
     save,
+    save_transcript,
     transcribe_meeting,
 )
+from minuteforge.protocol import Protocol
 from minuteforge.tasks import NOTHING_FOUND
 
 SEGMENTS = [
@@ -416,3 +418,16 @@ def test_backwards_range_is_an_error(tmp_path, with_token):
     with pytest.raises(Exception, match="распознавать нечего"):
         transcribe_meeting(audio, Settings(device="cpu"), backend=FakeBackend(),
                            work_dir=tmp_path, start="10:00", end="5:00")
+
+
+def test_saved_paths_are_absolute(tmp_path, monkeypatch):
+    """Относительный путь ничего не говорит человеку, который потом ищет
+    файлы в проводнике: показывать надо тот, по которому их найдут."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "вывод").mkdir()
+
+    paths = save_transcript(Transcript([Block("И", "Слово.", 0, 1)]), "вывод")
+    assert all(p.is_absolute() for p in paths.values())
+
+    written = save(Protocol(tasks=[]), "вывод", with_transcript=False)
+    assert all(p.is_absolute() for p in written.values())

@@ -637,3 +637,28 @@ def test_similar_but_different_objects_stay_apart():
         Task("Приступить к строительству объекта утилизации в Тюменской области"),
     ]
     assert len(dedupe(tasks)) == 2
+
+
+def test_task_is_tied_to_the_reply_it_came_from():
+    """По цитате видно сразу, поручение это или изложение доклада, и
+    сверяться с записью приходится только в спорных случаях."""
+    from minuteforge.tasks import attach_source
+
+    chunk = Chunk([
+        Block("Орлов В.П.", "Коротко о статусе программы за полтора года.", 3600, 3700),
+        Block("Орлов В.П.", "Просьба проанализировать невыбранные лимиты и доложить.", 3930, 3990),
+    ], index=1, total=1)
+
+    task = attach_source([Task("Проанализировать невыбранные лимиты")], chunk)[0]
+
+    assert task.at == 3930
+    assert "невыбранные лимиты" in task.quote
+    assert task.said_by == "Орлов В.П."
+
+
+def test_unmatched_task_is_left_without_a_place_rather_than_a_wrong_one():
+    from minuteforge.tasks import attach_source
+
+    chunk = Chunk([Block("И", "Совсем о другом.", 10, 20)], index=1, total=1)
+    task = attach_source([Task("Подготовить справку по инцидентам")], chunk)[0]
+    assert task.at is None or task.quote == "Совсем о другом."

@@ -109,8 +109,8 @@ class Protocol:
                 lines.append("Прозвучали, но исполнитель не назван:")
                 lines.append("")
                 for task in self.needs_clarification:
-                    due = f" (срок: {task.due})" if task.due else ""
-                    lines.append(f"- {task.what}{due}")
+                    due = f", срок: {task.due}" if task.due else ""
+                    lines.append(f"- **{_clock(task.at)}** {task.what}{due}")
 
         if with_transcript and self.transcript is not None:
             lines.extend(["", "## Стенограмма", "", "```", self.transcript.as_text(with_time=True), "```"])
@@ -195,9 +195,17 @@ class Protocol:
         """
         buffer = StringIO()
         writer = csv.writer(buffer, delimiter=";", lineterminator="\n")
-        writer.writerow(["№", "Поручение", "Исполнитель", "Срок", "Фрагмент"])
+        # Цитата в таблице — то, ради чего она и открывается: по ней видно
+        # сразу, поручение это или изложение доклада, и сверяться с записью
+        # приходится только в спорных случаях.
+        writer.writerow(
+            ["№", "Время", "Поручение", "Исполнитель", "Срок", "Кто сказал", "Цитата"]
+        )
         for number, task in enumerate(self.tasks, 1):
-            writer.writerow([number, task.what, task.who, task.due, task.chunk or ""])
+            writer.writerow([
+                number, _clock(task.at), task.what, task.who, task.due,
+                task.said_by, task.quote,
+            ])
         return buffer.getvalue()
 
 
@@ -252,14 +260,28 @@ def _task_lines(tasks: Sequence[Task]) -> list[str]:
     lines = []
     for number, task in enumerate(tasks, 1):
         due = f", срок — {task.due}" if task.due else ""
-        lines.append(f"{number}. {task.who}: {task.what}{due}.")
+        place = f" [{_clock(task.at)}]" if task.at is not None else ""
+        lines.append(f"{number}. {task.who}: {task.what}{due}.{place}")
     return lines
 
 
 def _task_table(tasks: Sequence[Task]) -> list[str]:
     if not tasks:
         return ["Поручений с назначенным исполнителем нет."]
-    rows = ["| № | Поручение | Исполнитель | Срок |", "|---|---|---|---|"]
+    # Время — колонка проверки. Без неё человек ищет место в двухчасовой
+    # записи сам, и сверка восьмидесяти пунктов съедает больше, чем сэкономил
+    # разбор.
+    rows = ["| № | Время | Поручение | Исполнитель | Срок |", "|---|---|---|---|---|"]
     for number, task in enumerate(tasks, 1):
-        rows.append(f"| {number} | {task.what} | {task.who} | {task.due or '—'} |")
+        rows.append(
+            f"| {number} | {_clock(task.at)} | {task.what} | {task.who} "
+            f"| {task.due or '—'} |"
+        )
     return rows
+
+
+def _clock(seconds: float | None) -> str:
+    if seconds is None:
+        return "—"
+    total = int(seconds)
+    return f"{total // 3600:02d}:{total % 3600 // 60:02d}:{total % 60:02d}"

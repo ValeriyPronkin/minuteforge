@@ -33,14 +33,14 @@ def test_tasks_split_into_actionable_and_unclear():
 def test_markdown_has_a_table_and_a_clarification_section():
     text = Protocol(tasks=TASKS, date="05.06.2025").as_markdown()
     assert "**Дата:** 05.06.2025" in text
-    assert "| 1 | Подготовить отчёт | Иванов | до среды |" in text
+    assert "| 1 | — | Подготовить отчёт | Иванов | до среды |" in text
     assert "### Требуют уточнения" in text
-    assert "- Собрать справку по инциденту (срок: к пятнице)" in text
+    assert "- **—** Собрать справку по инциденту, срок: к пятнице" in text
 
 
 def test_missing_deadline_is_a_dash_not_an_empty_cell():
     text = Protocol(tasks=[Task("Направить письмо", "Петров")]).as_markdown()
-    assert "| 1 | Направить письмо | Петров | — |" in text
+    assert "| 1 | — | Направить письмо | Петров | — |" in text
 
 
 def test_empty_fields_are_skipped_not_left_blank():
@@ -59,7 +59,7 @@ def test_meeting_where_nobody_was_assigned():
     """Все поручения без исполнителя — таблица пуста, но пункты видны."""
     text = Protocol(tasks=[Task("Подумать над сроками")]).as_markdown()
     assert "Поручений с назначенным исполнителем нет." in text
-    assert "- Подумать над сроками" in text
+    assert "- **—** Подумать над сроками" in text
 
 
 def test_transcript_is_attached_only_on_request():
@@ -99,9 +99,11 @@ def test_date_is_never_invented():
 
 def test_csv_carries_every_task_including_unassigned():
     rows = list(csv.reader(StringIO(Protocol(tasks=TASKS).tasks_csv()), delimiter=";"))
-    assert rows[0] == ["№", "Поручение", "Исполнитель", "Срок", "Фрагмент"]
+    assert rows[0] == [
+        "№", "Время", "Поручение", "Исполнитель", "Срок", "Кто сказал", "Цитата"
+    ]
     assert len(rows) == 1 + len(TASKS)
-    assert rows[3] == ["3", "Собрать справку по инциденту", "", "к пятнице", "2"]
+    assert rows[3] == ["3", "—", "Собрать справку по инциденту", "", "к пятнице", "", ""]
 
 
 def test_csv_uses_semicolon_for_excel():
@@ -165,3 +167,27 @@ def test_protocol_without_a_single_named_participant():
     text = protocol.as_markdown()
     assert "**Участники:**" not in text
     assert "**Не опознано голосов:** 2" in text
+
+
+def test_every_task_carries_its_place_in_the_recording():
+    """Без времени человек ищет место в двухчасовой записи сам, и сверка
+    восьмидесяти пунктов съедает больше, чем сэкономил разбор."""
+    tasks = [
+        Task("Подготовить план", "Ким С.А.", "до пятницы", chunk=2),
+    ]
+    tasks[0].at = 3930.0
+    tasks[0].quote = "Сергей, подготовьте план работ и согласуйте до пятницы."
+    tasks[0].said_by = "Орлов В.П."
+
+    text = Protocol(tasks=tasks).as_markdown()
+    assert "01:05:30" in text
+
+    rows = list(csv.reader(StringIO(Protocol(tasks=tasks).tasks_csv()), delimiter=";"))
+    assert rows[0] == ["№", "Время", "Поручение", "Исполнитель", "Срок", "Кто сказал", "Цитата"]
+    assert rows[1][1] == "01:05:30"
+    assert "подготовьте план" in rows[1][6]
+
+
+def test_task_without_a_place_shows_a_dash_not_a_crash():
+    text = Protocol(tasks=[Task("Подготовить план", "Ким С.А.")]).as_markdown()
+    assert "| — |" in text

@@ -146,9 +146,17 @@ class Task:
     what: str
     who: str = ""
     due: str = ""
-    #: Из какого куска стенограммы взято. По номеру можно вернуться к месту
-    #: разговора и проверить, не выдумала ли модель.
+    #: Из какого куска стенограммы взято.
     chunk: int = 0
+    #: Секунда записи, где это прозвучало. Главное поле для проверки: без
+    #: него человеку приходится искать место в двухчасовом видео, и проверка
+    #: восьмидесяти пунктов съедает больше времени, чем сэкономил разбор.
+    at: float | None = None
+    #: Реплика, из которой поручение выписано, как она есть в стенограмме.
+    #: По ней видно сразу, поручение это или изложение доклада.
+    quote: str = ""
+    #: Кто это сказал.
+    said_by: str = ""
 
     @property
     def key(self) -> str:
@@ -437,7 +445,9 @@ def extract_tasks(
         if answers is not None:
             answers.append(reply.text)
         parsed = parse_tasks(reply.text, chunk=chunk.index)
-        found = _keep_sound(parsed, chunk.text, corpus or chunk.text)
+        found = attach_source(
+            _keep_sound(parsed, chunk.text, corpus or chunk.text), chunk
+        )
 
         if reply.truncated:
             logger.warning(
@@ -463,10 +473,13 @@ def extract_tasks(
             else:
                 if answers is not None:
                     answers.append(again.text)
-                found = _keep_sound(
-                    parse_tasks(again.text, chunk=chunk.index),
-                    chunk.text,
-                    corpus or chunk.text,
+                found = attach_source(
+                    _keep_sound(
+                        parse_tasks(again.text, chunk=chunk.index),
+                        chunk.text,
+                        corpus or chunk.text,
+                    ),
+                    chunk,
                 )
         logger.info(
             "Фрагмент {}/{}: поручений {}, ответ за {} с",
@@ -497,6 +510,42 @@ def _own_prompt(settings) -> str:
     except OSError as exc:
         logger.warning("Не прочитать {}, беру встроенное указание: {}", path, exc)
         return ""
+
+
+def attach_source(tasks: list[Task], chunk: Chunk) -> list[Task]:
+    """Привязывает поручение к реплике, из которой оно выписано.
+
+    Ищется реплика с наибольшим совпадением по значимым словам. Способ
+    грубый, но проверять его дёшево: человек видит цитату рядом с
+    поручением и сразу понимает, то ли это место.
+
+    Без привязки проверка выглядит так: восемьдесят пунктов и двухчасовая
+    запись, ищите сами. С привязкой — взгляд на цитату и, если сомнительно,
+    переход к отметке времени.
+    """
+    attached = []
+    for task in tasks:
+        words = _significant(task.what)
+        best, score = None, 0.0
+        for block in chunk.blocks:
+            if not words:
+                break
+            overlap = len(words & _significant(block.text)) / len(words)
+            if overlap > score:
+                best, score = block, overlap
+        attached.append(Task(
+            what=task.what, who=task.who, due=task.due, chunk=task.chunk,
+            at=best.start if best is not None else None,
+            quote=_short_quote(best.text) if best is not None else "",
+            said_by=best.speaker if best is not None else "",
+        ))
+    return attached
+
+
+def _short_quote(text: str, limit: int = 220) -> str:
+    """Цитата достаточной длины, чтобы понять, о чём речь, но не абзац."""
+    text = " ".join((text or "").split())
+    return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0] + "…"
 
 
 def _keep_sound(tasks: list[Task], source: str, corpus: str) -> list[Task]:
@@ -655,6 +704,9 @@ def _merge_group(tasks: list[Task], indexes: list[int]) -> Task:
         who=next((t.who for t in group if t.who), ""),
         due=next((t.due for t in group if t.due), ""),
         chunk=min(t.chunk for t in group),
+        at=next((t.at for t in group if t.at is not None), None),
+        quote=next((t.quote for t in group if t.quote), ""),
+        said_by=next((t.said_by for t in group if t.said_by), ""),
     )
 
 
@@ -717,6 +769,9 @@ def dedupe(tasks: Iterable[Task]) -> list[Task]:
             who=old_task.who or task.who,
             due=old_task.due or task.due,
             chunk=min(old_task.chunk, task.chunk) or old_task.chunk,
+            at=old_task.at if old_task.at is not None else task.at,
+            quote=old_task.quote or task.quote,
+            said_by=old_task.said_by or task.said_by,
         )
     return kept
 

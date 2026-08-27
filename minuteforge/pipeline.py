@@ -274,7 +274,9 @@ def save_transcript(
     подразделение и читается глазами. json нужен, чтобы вернуться к этой же
     записи и пересобрать протокол, не распознавая заново.
     """
-    out_dir = Path(out_dir)
+    # Полный путь, а не тот, что ввели: относительный «data/output» ничего
+    # не говорит человеку, который потом ищет файлы в проводнике.
+    out_dir = Path(out_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
     text = out_dir / f"{stem}.txt"
@@ -319,7 +321,7 @@ def save(
         на шаге распознавания, второй раз не нужно: одна и та же расшифровка
         под двумя именами в одной папке только сбивает с толку.
     """
-    out_dir = Path(out_dir)
+    out_dir = Path(out_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if template is not None:

@@ -214,13 +214,17 @@ with st.sidebar:
 
     ready_segments = st.file_uploader("Готовая стенограмма (json)", type=["json"])
 
+    # Путь показывается полным и заранее. Относительный «data/output» ничего
+    # не говорит человеку, который запустил приложение ярлыком: искать файлы
+    # он будет наугад.
     out_dir = Path(st.text_input(
         "Куда сохранять результаты",
         str(OUTPUT_DIR),
         help="Стенограмма и протокол ложатся сюда сразу, без кнопок «скачать». "
         "Можно указать сетевую папку, из которой их заберёт другое "
         "подразделение.",
-    ).strip() or OUTPUT_DIR)
+    ).strip() or OUTPUT_DIR).expanduser().resolve()
+    st.caption(f"Файлы появятся здесь: `{out_dir}`")
 
     st.header("Документ")
     roster_file = st.file_uploader(
@@ -315,8 +319,22 @@ with st.sidebar:
     # небольшим и молча отрезает всё сверх него — модель не видит конца
     # фрагмента и половины поручений в нём.
     window, limit = LLMClient(Settings(llm_base_url=address)).context_window()
-    if limit:
+    ROOMY = 8192
+
+    if limit and limit >= ROOMY:
         st.caption(f"Сервер принимает не больше {limit} токенов за раз.")
+    elif limit:
+        # Предел объявлен, но тесный. Это не ошибка настройки, а умолчание
+        # Ollama, и без подсказки человек оставит его как есть: фрагменты
+        # режутся молча, а выглядит это как будто модель плохо ищет.
+        st.warning(
+            f"Сервер принимает не больше {limit} токенов за раз — этого мало. "
+            "Фрагменты придётся дробить мелко, и на границах теряются "
+            f"поручения. Поднимите предел до {ROOMY}:\n\n"
+            "```\nFROM <ваша модель>\nPARAMETER num_ctx 8192\n```\n"
+            "Сохраните это в файл `Modelfile` и выполните "
+            "`ollama create моя-модель -f Modelfile`, а её имя впишите выше."
+        )
     elif window:
         # Предел не объявлен — значит действует умолчание сервера, а оно у
         # Ollama невелико: две-четыре тысячи. Всё сверх него молча
@@ -525,9 +543,10 @@ with st.expander("Стенограмма"):
     st.text(transcript.as_text(with_time=True))
 saved = st.session_state.get("saved_transcript")
 if saved:
-    st.success(
-        f"Стенограмма сохранена: `{saved['text']}` (текстом) и "
-        f"`{saved['json']}` (для повторной сборки протокола)."
+    st.success(f"Стенограмма сохранена в `{Path(saved['text']).parent}`")
+    st.markdown(
+        f"- `{Path(saved['text']).name}` — текстом, для передачи\n"
+        f"- `{Path(saved['json']).name}` — для повторной сборки протокола"
     )
 
 # Файлы уже сохранены в папку, и кнопка «скачать» — не главный путь, а
@@ -711,15 +730,32 @@ if protocol is not None:
 
     written = st.session_state.get("saved_protocol")
     if written:
-        st.success(
-            "Сохранено: " + ", ".join(f"`{path}`" for path in written.values())
-        )
+        folder = Path(next(iter(written.values()))).parent
+        st.success(f"Протокол сохранён в `{folder}`")
+        st.markdown("\n".join(f"- `{Path(path).name}`" for path in written.values()))
 
     template = st.session_state.get("template")
     document = protocol.render(template) if template else protocol.as_markdown()
     if template:
         st.caption("Документ собран по вашей форме.")
     st.markdown(document if not template else f"```\n{document}\n```")
+
+    # Цитаты — то, ради чего таблица и открывается: по ним видно сразу,
+    # поручение это или изложение доклада, и обращаться к записи приходится
+    # только в спорных случаях.
+    with st.expander(f"Проверить по стенограмме ({len(protocol.tasks)})"):
+        st.caption(
+            "Рядом с каждым поручением — время и реплика, из которой оно "
+            "выписано. Если реплика на поручение не похожа, пункт лишний: "
+            "вычеркните его при вычитке."
+        )
+        for number, task in enumerate(protocol.tasks, 1):
+            stamp = task.at
+            clock = (
+                f"{int(stamp)//3600:02d}:{int(stamp)%3600//60:02d}:{int(stamp)%60:02d}"
+                if stamp is not None else "—"
+            )
+            st.markdown(f"**{number}. {task.what}**  \n`{clock}` {task.said_by}: {task.quote}")
 
     with st.expander("Скачать себе"):
         st.caption(

@@ -44,6 +44,10 @@ from minuteforge.transcribe import (  # noqa: E402
 
 BASE = Settings.load(ROOT / "config.yaml")
 WORK_DIR = ROOT / "data" / "work"
+INPUT_DIR = Path(BASE.input_dir) if Path(BASE.input_dir).is_absolute() else ROOT / BASE.input_dir
+
+#: Что считаем записью совещания при выборе файла с диска.
+MEDIA_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v", ".wav", ".m4a", ".mp3"}
 
 st.set_page_config(page_title="minuteforge", page_icon="📝", layout="wide")
 
@@ -110,10 +114,45 @@ def transcript_from_state() -> Transcript | None:
 # ---------------------------------------------------------------- сайдбар
 with st.sidebar:
     st.header("Запись")
+
+    # Главный путь — файл, который уже лежит на этой машине. Загрузка через
+    # браузер гонит гигабайты видео в память сервера и потом копирует их на
+    # диск, хотя приложение работает там же, где запись. На часовом
+    # совещании это минуты ожидания на ровном месте.
+    found = sorted(
+        path for path in INPUT_DIR.glob("*")
+        if path.suffix.lower() in MEDIA_SUFFIXES
+    ) if INPUT_DIR.exists() else []
+
+    picked = st.selectbox(
+        "Файл на этой машине",
+        ["", *[str(path.name) for path in found]],
+        format_func=lambda name: name or f"— выбрать из {INPUT_DIR} —",
+    ) if found else ""
+
+    typed = st.text_input(
+        "…либо полный путь",
+        placeholder=r"D:\meetings\meeting.mp4",
+        help="Файл не копируется и никуда не загружается: расчёт читает его "
+        "с диска там, где он лежит.",
+    )
+
     uploaded = st.file_uploader(
-        "Видео или аудио", type=["mp4", "avi", "mov", "mkv", "wav", "m4a", "mp3"]
+        "…либо загрузить",
+        type=["mp4", "avi", "mov", "mkv", "wav", "m4a", "mp3"],
+        help="Нужно только если запись лежит не на этой машине. Загрузка "
+        "часового видео занимает минуты и удваивает его на диске.",
     )
     ready_segments = st.file_uploader("…либо готовая стенограмма (json)", type=["json"])
+
+    source_path: Path | None = None
+    if typed.strip():
+        source_path = Path(typed.strip().strip('"'))
+        if not source_path.exists():
+            st.error(f"Файл не найден: {source_path}")
+            source_path = None
+    elif picked:
+        source_path = INPUT_DIR / picked
 
     st.header("Документ")
     roster_file = st.file_uploader(
@@ -250,15 +289,24 @@ if ready_segments is not None:
     st.session_state["segments"] = json.load(ready_segments)
     st.success(f"Загружена готовая стенограмма: {len(st.session_state['segments'])} сегментов.")
 
-if uploaded is not None:
-    if uploaded.type.startswith("audio"):
+if source_path is not None or uploaded is not None:
+    if source_path is not None:
+        size = source_path.stat().st_size / 1024 / 1024
+        st.write(f"Файл: `{source_path}` — {size:.0f} МБ, читается с диска.")
+    elif uploaded.type.startswith("audio"):
         st.audio(uploaded)
     else:
         st.video(uploaded)
+
     if st.button("Распознать", type="primary"):
         WORK_DIR.mkdir(parents=True, exist_ok=True)
-        source = WORK_DIR / uploaded.name
-        source.write_bytes(uploaded.getbuffer())
+        if source_path is not None:
+            # Ничего не копируем: расчёт читает файл там, где он лежит.
+            source = source_path
+        else:
+            source = WORK_DIR / uploaded.name
+            with st.spinner("Сохраняю загруженный файл…"):
+                source.write_bytes(uploaded.getbuffer())
         live = Live("Готовлюсь…")
         try:
             transcript = transcribe_meeting(

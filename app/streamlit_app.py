@@ -385,6 +385,15 @@ with st.sidebar:
         "больше, считать дольше, но находит она заметно больше.",
     )
 
+    # Размер фрагмента — не настройка, а следствие двух других, и считать
+    # его в уме человеку незачем. Заодно видно, когда «дробить мельче»
+    # ничего не меняет: на тесном окне расчётный фрагмент и так мелкий.
+    FINE_TOKENS = 1200
+    planned = FINE_TOKENS if fine else max(500, int(int(context) * BASE.chunk_context_share))
+    st.caption(f"Фрагмент выйдет ~{planned} токенов — примерно {planned // 150} мин разговора.")
+    if fine and planned >= max(500, int(int(context) * BASE.chunk_context_share)):
+        st.caption("На таком окне дробление мельче почти ничего не меняет.")
+
     # Раскрыт, когда связи нет: третий пункт из списка выше делается тут.
     with st.expander("Адрес сервера", expanded=not installed):
         st.text_input(

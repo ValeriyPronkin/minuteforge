@@ -19,7 +19,13 @@ from typing import Sequence
 from loguru import logger
 
 from .audio import extract_audio
-from .blocks import Transcript, blocks_from_segments, consolidate, rename_speakers
+from .blocks import (
+    Transcript,
+    blocks_from_segments,
+    consolidate,
+    drop_soundcheck,
+    rename_speakers,
+)
 from .chunking import split_into_chunks
 from .config import Settings
 from .llm import LLMClient
@@ -159,8 +165,16 @@ def protocol_from_transcript(
         blocks = rename_speakers(blocks, meeting.names)
     named = Transcript(blocks)
 
+    # Перекличка отбрасывается только здесь, на входе в модель: стенограмма
+    # остаётся полной. Расшифровка должна быть точной — что прозвучало, то и
+    # записано; отбирать, чему место в документе, а чему нет, дело того, кто
+    # ведёт протокол, а не инструмента.
+    for_model, skipped = drop_soundcheck(blocks) if settings.drop_soundcheck else (blocks, 0)
+    if skipped:
+        logger.info("Перекличка в начале записи пропущена: {} реплик", skipped)
+
     chunks = split_into_chunks(
-        blocks,
+        for_model,
         max_tokens=settings.chunk_budget,
         overlap_blocks=settings.chunk_overlap_blocks,
     )

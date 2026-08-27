@@ -287,8 +287,11 @@ def test_json_example_in_the_prompt_parses_by_our_own_rules():
     system, _ = build_prompt(Chunk([Block("И", "раз")], index=1, total=1), json_mode=True)
     example = system.split("Ответ:", 1)[1]
     tasks = parse_tasks(example)
-    assert len(tasks) == 2
-    assert tasks[1].who == "", "в примере показано поручение без исполнителя"
+
+    assert len(tasks) == 5, "в примере показаны все ходовые формы поручения"
+    assert any(t.who == "" for t in tasks), "показано поручение без исполнителя"
+    assert any("системно" in t.what for t in tasks), "показана форма «просьба»"
+    assert any("выписки" in t.what for t in tasks), "показана форма «в протокол»"
 
 
 def test_line_format_still_works_when_json_is_not_used():

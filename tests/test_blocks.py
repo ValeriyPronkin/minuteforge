@@ -172,3 +172,55 @@ def test_speaking_time_survives_missing_timings():
     transcript = Transcript([Block("Иванов", "Раз."), Block("Петров", "Два.", 0, 5)])
     assert transcript.speaking_time()["Иванов"] == 0.0
     assert transcript.speakers_by_time()[0] == "Петров"
+
+
+# ------------------------------------------------------- перекличка
+
+def test_soundcheck_is_recognised():
+    """На совещании с десятками подключений первый час уходит на «как
+    слышно, видно» — до половины записи, и в модель такие фрагменты уходят
+    целиком, вытесняя настоящий разговор."""
+    from minuteforge.blocks import is_soundcheck
+
+    assert is_soundcheck("Добрый день, Саратов, как слышно видно, проверка связи.")
+    assert is_soundcheck("Коллеги, доброго дня, Ставропольский край, как видно?")
+    assert is_soundcheck("Да, видим, слышим. Спасибо.")
+
+
+def test_business_speech_is_not_mistaken_for_soundcheck():
+    from minuteforge.blocks import is_soundcheck
+
+    assert not is_soundcheck("Проконтролируйте, пожалуйста.")
+    assert not is_soundcheck("Уточнитесь, подтвердитесь и очень активно действуйте.")
+    assert not is_soundcheck(
+        "Добрый день, уважаемые коллеги. Сегодня очередная встреча в эфире, "
+        "проводим заседание, повестка состоит из четырёх вопросов, и перед тем "
+        "как начнём работу, хотелось поприветствовать участников."
+    )
+
+
+def test_only_the_opening_roll_call_is_cut():
+    """«Нас слышно?» посреди доклада — уже часть совещания, и выкидывать её
+    нельзя: режем только начало, до первой настоящей реплики."""
+    from minuteforge.blocks import drop_soundcheck
+
+    blocks = [
+        Block("SPEAKER_01", "Добрый день, как слышно, видно?", 0, 5),
+        Block("SPEAKER_02", "Да, видим, слышим.", 5, 8),
+        Block("SPEAKER_03", "Коллеги, начинаем заседание, повестка из четырёх вопросов.", 10, 60),
+        Block("SPEAKER_04", "Прошу прощения, меня слышно?", 60, 63),
+        Block("SPEAKER_03", "Да. Продолжайте доклад.", 63, 70),
+    ]
+    kept, skipped = drop_soundcheck(blocks)
+
+    assert skipped == 2
+    assert len(kept) == 3
+    assert "слышно" in kept[1].text, "перекличка внутри совещания остаётся"
+
+
+def test_meeting_without_a_roll_call_is_untouched():
+    from minuteforge.blocks import drop_soundcheck
+
+    blocks = [Block("SPEAKER_01", "Начинаем заседание, повестка из четырёх вопросов.", 0, 30)]
+    kept, skipped = drop_soundcheck(blocks)
+    assert skipped == 0 and kept == blocks

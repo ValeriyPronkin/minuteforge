@@ -327,3 +327,35 @@ def test_extracted_audio_lands_in_the_recording_own_folder(tmp_path, with_token,
 
     assert seen["target"].parent != work, "звук не должен ложиться в общую папку"
     assert seen["target"].parent.name.startswith("meeting-")
+
+
+def test_roll_call_is_dropped_only_on_the_way_to_the_model(tmp_path):
+    """Стенограмма остаётся полной: расшифровка должна быть точной, а что
+    войдёт в документ, решает тот, кто ведёт протокол, а не инструмент.
+    """
+    transcript_with_roll_call = Transcript([
+        Block("SPEAKER_00", "Саратов, как слышно, видно?", 0, 5),
+        Block("SPEAKER_01", "Да, видим, слышим.", 5, 9),
+        Block("SPEAKER_02", "Коллеги, начинаем. Подготовьте план до пятницы.", 10, 60),
+    ])
+    client = FakeClient()
+    protocol = protocol_from_transcript(transcript_with_roll_call, Settings(), client=client)
+
+    asked = client.prompts[0]
+    assert "как слышно" not in asked, "перекличка в модель идти не должна"
+    assert "Подготовьте план" in asked
+
+    saved = save(protocol, tmp_path)
+    assert "как слышно" in saved["transcript"].read_text(encoding="utf-8")
+
+
+def test_roll_call_filter_can_be_turned_off():
+    transcript_with_roll_call = Transcript([
+        Block("SPEAKER_00", "Саратов, как слышно, видно?", 0, 5),
+        Block("SPEAKER_02", "Коллеги, начинаем заседание.", 10, 60),
+    ])
+    client = FakeClient()
+    protocol_from_transcript(
+        transcript_with_roll_call, Settings(drop_soundcheck=False), client=client
+    )
+    assert "как слышно" in client.prompts[0]

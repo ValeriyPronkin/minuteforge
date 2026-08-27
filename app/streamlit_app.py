@@ -485,13 +485,20 @@ if saved:
         f"`{saved['json']}` (для повторной сборки протокола)."
     )
 
-st.download_button(
-    "Скачать стенограмму json",
-    json.dumps(st.session_state["segments"], ensure_ascii=False, indent=2).encode("utf-8"),
-    "segments.json",
-    "application/json",
-    help="По этому файлу протокол пересобирается без видеокарты, на любой машине.",
-)
+# Файлы уже сохранены в папку, и кнопка «скачать» — не главный путь, а
+# запасной: она нужна тому, кто открыл приложение по сети со своей машины,
+# потому что сохраняется всё на той, где приложение запущено.
+with st.expander("Скачать себе"):
+    st.caption(
+        "Нужно, если вы открыли приложение по сети: файлы сохраняются на той "
+        "машине, где оно запущено, а не у вас."
+    )
+    st.download_button(
+        "Стенограмма json",
+        json.dumps(st.session_state["segments"], ensure_ascii=False, indent=2).encode("utf-8"),
+        "стенограмма.json",
+        "application/json",
+    )
 
 # ---------------------------------------------------------------- шаг 2
 st.subheader("Шаг 2. Кто есть кто")
@@ -669,27 +676,22 @@ if protocol is not None:
         st.caption("Документ собран по вашей форме.")
     st.markdown(document if not template else f"```\n{document}\n```")
 
-    # Три файла, а не один: протокол подписывают, стенограмму держат как
-    # сырьё для проверки спорного места, таблицу ставят на контроль.
-    files = st.columns(3)
-    files[0].download_button(
-        "Скачать протокол",
-        document.encode("utf-8"),
-        "protocol.md",
-        "text/markdown",
-        **full_width(),
-    )
-    files[1].download_button(
-        "Скачать стенограмму",
-        transcript.as_text(with_time=True).encode("utf-8"),
-        "transcript.txt",
-        "text/plain",
-        **full_width(),
-    )
-    files[2].download_button(
-        "Скачать поручения csv",
-        protocol.tasks_csv().encode("utf-8-sig"),
-        "tasks.csv",
-        "text/csv",
-        **full_width(),
-    )
+    with st.expander("Скачать себе"):
+        st.caption(
+            "Файлы уже сохранены в папку выше. Эти кнопки нужны, если вы "
+            "открыли приложение по сети: сохраняется всё на той машине, где "
+            "оно запущено, а не у вас."
+        )
+        files = st.columns(3)
+        files[0].download_button(
+            "Протокол", document.encode("utf-8"), "протокол.md", "text/markdown",
+            **full_width(),
+        )
+        files[1].download_button(
+            "Стенограмма", transcript.as_text(with_time=True).encode("utf-8"),
+            "стенограмма.txt", "text/plain", **full_width(),
+        )
+        files[2].download_button(
+            "Поручения csv", protocol.tasks_csv().encode("utf-8-sig"),
+            "поручения.csv", "text/csv", **full_width(),
+        )

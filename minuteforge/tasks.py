@@ -267,6 +267,43 @@ def is_russian(text: str) -> bool:
     return cyrillic / len(letters) >= 0.5
 
 
+#: Кого нельзя записать в исполнители. Это не люди и не подразделения, а
+#: обращения: поручение «коллегам» разослать некому, и в графе контроля от
+#: него один вред — оно выглядит назначенным, а спросить не с кого.
+_NOT_AN_ASSIGNEE = {
+    "мы", "вы", "они", "все", "коллеги", "уважаемые коллеги", "участники",
+    "участники совещания", "присутствующие", "всем", "нам", "ассистент",
+    "assistant", "команда", "секретарь совещания",
+}
+
+#: По этим приметам строка похожа на срок. Модель кладёт в это поле что
+#: угодно — «Завершена», «Отправлено», «Добрый день», — и такой «срок» в
+#: таблице контроля хуже пустого: по нему нельзя ни спросить, ни отсортировать.
+_LOOKS_LIKE_DUE = (
+    "до ", "к ", "через ", "сегодня", "завтра", "недел", "месяц", "квартал",
+    "год", "числ", "янв", "фев", "март", "апрел", "ма", "июн", "июл", "авг",
+    "сент", "октяб", "нояб", "декаб", "понедельник", "вторник", "сред",
+    "четверг", "пятниц", "суббот", "воскресен", "срок", "постоянно",
+    "ежемесячн", "еженедельн", "немедленн", "срочно",
+)
+
+
+def clean_due(due: str) -> str:
+    """Оставляет срок, только если это похоже на срок.
+
+    Модель охотно заполняет это поле состоянием («Завершена», «В процессе»)
+    или обрывком реплики («Добрый день»). В таблице контроля такое хуже
+    пустого: строка выглядит заполненной, а спросить по ней нечего.
+    """
+    due = (due or "").strip()
+    if not due or not is_russian(due):
+        return ""
+    lowered = due.lower()
+    if any(ch.isdigit() for ch in lowered):
+        return due
+    return due if any(mark in lowered for mark in _LOOKS_LIKE_DUE) else ""
+
+
 def _significant(text: str) -> set[str]:
     """Слова, по которым можно узнать, о том ли речь.
 
@@ -304,6 +341,8 @@ def clean_assignee(who: str, source: str) -> str:
     """
     who = (who or "").strip()
     if not who:
+        return ""
+    if who.lower().strip(".,") in _NOT_AN_ASSIGNEE:
         return ""
     if len(who.split()) > 6:
         return ""  # это предложение, а не исполнитель
@@ -374,11 +413,31 @@ def extract_tasks(
 
         if answers is not None:
             answers.append(reply.text)
-        found = _keep_sound(
-            parse_tasks(reply.text, chunk=chunk.index),
-            chunk.text,
-            corpus or chunk.text,
-        )
+        parsed = parse_tasks(reply.text, chunk=chunk.index)
+        found = _keep_sound(parsed, chunk.text, corpus or chunk.text)
+
+        # Модель ответила по-английски, и от фрагмента ничего не осталось.
+        # Просьба в промпте её не удержала, но повтор с требованием в самом
+        # конце запроса — обычно да: последнее указание весит больше всего.
+        if parsed and not found and not any(is_russian(t.what) for t in parsed):
+            logger.info("Фрагмент {}: ответ по-английски, повторяю запрос", chunk.index)
+            try:
+                again = client.complete(
+                    system,
+                    f"{user}\n\nВНИМАНИЕ: ответ должен быть на русском языке.",
+                    json_mode=bool(json_mode),
+                    schema=TASKS_SCHEMA if json_mode else None,
+                )
+            except LLMError as exc:
+                logger.warning("Повтор не удался: {}", exc)
+            else:
+                if answers is not None:
+                    answers.append(again.text)
+                found = _keep_sound(
+                    parse_tasks(again.text, chunk=chunk.index),
+                    chunk.text,
+                    corpus or chunk.text,
+                )
         logger.info(
             "Фрагмент {}/{}: поручений {}, ответ за {} с",
             chunk.index, chunk.total, len(found), reply.elapsed_s,
@@ -413,7 +472,7 @@ def _keep_sound(tasks: list[Task], source: str, corpus: str) -> list[Task]:
         kept.append(Task(
             what=task.what,
             who=clean_assignee(task.who, corpus),
-            due=task.due if is_russian(task.due) or not task.due else "",
+            due=clean_due(task.due),
             chunk=task.chunk,
         ))
     return kept

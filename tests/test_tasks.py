@@ -372,3 +372,50 @@ def test_assignee_named_elsewhere_in_the_meeting_survives():
 
     corpus = "У нас на связи Белянина Ольга Евгеньевна, министр экологии. " + FRAGMENT
     assert clean_assignee("Белянина", corpus) == "Белянина"
+
+
+def test_english_answer_triggers_one_retry():
+    """Просьба в промпте модель не удерживает, но требование в самом конце
+    запроса — обычно да: последнее указание весит больше всего."""
+    chunk = Chunk(
+        [Block("Орлов В.П.", "Просьба проанализировать невыбранные лимиты.")],
+        index=1, total=1,
+    )
+    client = FakeClient(
+        '{"tasks": [{"what": "Analyze the unused limits", "who": "", "due": ""}]}',
+        '{"tasks": [{"what": "Проанализировать невыбранные лимиты", "who": "", "due": ""}]}',
+    )
+    tasks = extract_tasks([chunk], client)
+
+    assert len(client.prompts) == 2, "должен быть ровно один повтор"
+    assert "русском языке" in client.prompts[1][1]
+    assert [t.what for t in tasks] == ["Проанализировать невыбранные лимиты"]
+
+
+def test_russian_answer_is_not_retried():
+    chunk = Chunk([Block("О", "Просьба проанализировать лимиты.")], index=1, total=1)
+    client = FakeClient('{"tasks": [{"what": "Проанализировать лимиты", "who": "", "due": ""}]}')
+    extract_tasks([chunk], client)
+    assert len(client.prompts) == 1
+
+
+def test_state_in_the_due_field_is_cleared():
+    """«Завершена» и «Добрый день» в графе срока хуже пустого места: строка
+    выглядит заполненной, а спросить по ней нечего."""
+    from minuteforge.tasks import clean_due
+
+    assert clean_due("Завершена") == ""
+    assert clean_due("Добрый день") == ""
+    assert clean_due("15 сентября") == "15 сентября"
+    assert clean_due("до конца следующей недели") == "до конца следующей недели"
+
+
+def test_greeting_is_not_an_assignee():
+    """Поручение «уважаемым коллегам» разослать некому, а в графе контроля
+    оно выглядит назначенным."""
+    from minuteforge.tasks import clean_assignee
+
+    corpus = "Уважаемые коллеги, мы начинаем. Ким С.А., подготовьте справку."
+    assert clean_assignee("Уважаемые коллеги", corpus) == ""
+    assert clean_assignee("Мы", corpus) == ""
+    assert clean_assignee("Ким С.А.", corpus) == "Ким С.А."

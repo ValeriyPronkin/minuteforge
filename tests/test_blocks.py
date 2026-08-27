@@ -224,3 +224,23 @@ def test_meeting_without_a_roll_call_is_untouched():
     blocks = [Block("SPEAKER_01", "Начинаем заседание, повестка из четырёх вопросов.", 0, 30)]
     kept, skipped = drop_soundcheck(blocks)
     assert skipped == 0 and kept == blocks
+
+
+def test_greetings_inside_the_roll_call_do_not_stop_the_filter():
+    """Посреди часовой переклички то и дело мелькает «Здравствуйте!», где нет
+    ни «слышно», ни «видно». Останавливаясь на первой такой, фильтр срезал
+    шесть реплик вместо полутора сотен."""
+    from minuteforge.blocks import drop_soundcheck
+
+    blocks = (
+        [Block("S1", "Добрый день, как слышно, видно?", i, i + 1) for i in range(10)]
+        + [Block("S2", "Здравствуйте!", 20, 21)]
+        + [Block("S3", "Область на связи, видно, слышно?", 30, 35)]
+        + [Block("S4", "Начинаем заседание, повестка из четырёх вопросов.", 40, 90)]
+        + [Block("S5", "Коротко о статусе программы за полтора года.", 90, 140)]
+        + [Block("S4", "Просьба работать системно.", 140, 150)]
+    )
+    kept, dropped = drop_soundcheck(blocks)
+
+    assert dropped == 12, "перекличка уходит целиком, короткие приветствия её не прерывают"
+    assert kept[0].text.startswith("Начинаем заседание")

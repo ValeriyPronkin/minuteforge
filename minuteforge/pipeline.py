@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -202,6 +203,41 @@ def process(
     return protocol_from_transcript(
         transcript, settings, meeting=meeting, client=client, progress=progress
     )
+
+
+def save_transcript(
+    transcript: Transcript,
+    out_dir: str | Path,
+    *,
+    stem: str = "transcript",
+) -> dict[str, Path]:
+    """Сохраняет стенограмму текстом и в json.
+
+    Два формата, потому что читают их разные люди. Текст уходит в другое
+    подразделение и читается глазами. json нужен, чтобы вернуться к этой же
+    записи и пересобрать протокол, не распознавая заново.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    text = out_dir / f"{stem}.txt"
+    text.write_text(transcript.as_text(with_time=True), encoding="utf-8")
+
+    data = out_dir / f"{stem}.json"
+    data.write_text(
+        json.dumps(
+            [
+                {"speaker": b.speaker, "text": b.text, "start": b.start, "end": b.end}
+                for b in transcript.blocks
+            ],
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    logger.info("Стенограмма сохранена: {} и {}", text.name, data.name)
+    return {"text": text, "json": data}
 
 
 def save(

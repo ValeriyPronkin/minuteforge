@@ -7,9 +7,9 @@ from minuteforge.cli import (
     load_transcript,
     main,
     parse_names,
-    save_transcript,
     settings_from,
 )
+from minuteforge.pipeline import save_transcript
 from minuteforge.blocks import Block, Transcript
 from minuteforge.config import Settings
 
@@ -71,9 +71,12 @@ def test_command_line_wins_over_the_config():
 
 
 def test_transcript_round_trip(tmp_path):
+    """Стенограмма сохраняется дважды: текстом для людей, json для расчёта."""
     transcript = Transcript([Block("Иванов", "Раз.", 0, 5)])
-    path = save_transcript(transcript, tmp_path / "выгрузка" / "segments.json")
-    restored = load_transcript(path)
+    paths = save_transcript(transcript, tmp_path / "выгрузка")
+
+    assert "Иванов: Раз." in paths["text"].read_text(encoding="utf-8")
+    restored = load_transcript(paths["json"])
     assert restored.blocks[0].speaker == "Иванов"
     assert restored.blocks[0].end == 5
 
@@ -131,7 +134,8 @@ def test_recognize_reports_labels_for_the_next_step(tmp_path, monkeypatch, capsy
     out = capsys.readouterr().out
     assert "SPEAKER_00, SPEAKER_01" in out
     assert "minuteforge protocol" in out, "должна быть подсказка про следующий шаг"
-    assert (tmp_path / "meeting_segments.json").exists()
+    assert (tmp_path / "meeting_transcript.txt").exists(), "стенограмма текстом"
+    assert (tmp_path / "meeting_transcript.json").exists(), "стенограмма для расчёта"
 
 
 def test_missing_token_exits_without_a_traceback(tmp_path, monkeypatch, capsys):

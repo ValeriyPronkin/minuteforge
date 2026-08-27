@@ -36,7 +36,13 @@ from minuteforge.people import (  # noqa: E402
     read_people,
     suggest_speakers,
 )
-from minuteforge.pipeline import Meeting, protocol_from_transcript, transcribe_meeting  # noqa: E402
+from minuteforge.pipeline import (  # noqa: E402
+    Meeting,
+    protocol_from_transcript,
+    save,
+    save_transcript,
+    transcribe_meeting,
+)
 from minuteforge.transcribe import (  # noqa: E402
     MissingToken,
     RecognitionError,
@@ -46,6 +52,7 @@ from minuteforge.transcribe import (  # noqa: E402
 BASE = Settings.load(ROOT / "config.yaml")
 WORK_DIR = ROOT / "data" / "work"
 INPUT_DIR = Path(BASE.input_dir) if Path(BASE.input_dir).is_absolute() else ROOT / BASE.input_dir
+OUTPUT_DIR = Path(BASE.output_dir) if Path(BASE.output_dir).is_absolute() else ROOT / BASE.output_dir
 
 #: Что считаем записью совещания при выборе файла с диска.
 MEDIA_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v", ".wav", ".m4a", ".mp3"}
@@ -205,6 +212,14 @@ with st.sidebar:
         )
 
     ready_segments = st.file_uploader("Готовая стенограмма (json)", type=["json"])
+
+    out_dir = Path(st.text_input(
+        "Куда сохранять результаты",
+        str(OUTPUT_DIR),
+        help="Стенограмма и протокол ложатся сюда сразу, без кнопок «скачать». "
+        "Можно указать сетевую папку, из которой их заберёт другое "
+        "подразделение.",
+    ).strip() or OUTPUT_DIR)
 
     st.header("Документ")
     roster_file = st.file_uploader(
@@ -422,6 +437,10 @@ if source_path is not None or uploaded is not None:
                 {"speaker": b.speaker, "text": b.text, "start": b.start, "end": b.end}
                 for b in transcript.blocks
             ]
+            # Кладём сразу в папку: «Загрузки» на этой машине — не то место,
+            # откуда стенограмму заберёт другое подразделение.
+            saved = save_transcript(transcript, out_dir, stem=f"{source.stem}_стенограмма")
+            st.session_state["saved_transcript"] = saved
         except MissingToken as exc:
             st.error(str(exc))
             st.caption(
@@ -447,6 +466,13 @@ for note in getattr(transcript, "notes", []):
     st.warning(f"Не хватило видеопамяти: {note}. Качество расшифровки будет ниже.")
 with st.expander("Стенограмма"):
     st.text(transcript.as_text(with_time=True))
+saved = st.session_state.get("saved_transcript")
+if saved:
+    st.success(
+        f"Стенограмма сохранена: `{saved['text']}` (текстом) и "
+        f"`{saved['json']}` (для повторной сборки протокола)."
+    )
+
 st.download_button(
     "Скачать стенограмму json",
     json.dumps(st.session_state["segments"], ensure_ascii=False, indent=2).encode("utf-8"),
@@ -530,6 +556,24 @@ if st.button("Собрать протокол", type="primary"):
         transcript, settings, meeting=meeting, client=client, progress=live
     )
     live.finish("Протокол собран")
+
+    template_text = (
+        template_file.getvalue().decode("utf-8-sig") if template_file is not None else None
+    )
+    written = save(
+        protocol, out_dir,
+        stem="протокол",
+        template=st.session_state.get("template_path"),
+    ) if template_text is None else None
+    if written is None:
+        # Форму передали файлом: сохраняем то, что вышло после подстановки.
+        out_dir.mkdir(parents=True, exist_ok=True)
+        document = out_dir / "протокол.md"
+        document.write_text(protocol.render(template_text), encoding="utf-8")
+        tasks = out_dir / "поручения.csv"
+        tasks.write_text(protocol.tasks_csv(), encoding="utf-8-sig")
+        written = {"protocol": document, "tasks": tasks}
+    st.session_state["saved_protocol"] = written
     st.session_state["protocol"] = protocol
     st.session_state["template"] = (
         template_file.getvalue().decode("utf-8-sig") if template_file is not None else None
@@ -562,6 +606,12 @@ if protocol is not None:
             for number, answer in enumerate(protocol.answers, 1):
                 st.markdown(f"**Фрагмент {number}**")
                 st.text(answer or "(пустой ответ)")
+
+    written = st.session_state.get("saved_protocol")
+    if written:
+        st.success(
+            "Сохранено: " + ", ".join(f"`{path}`" for path in written.values())
+        )
 
     template = st.session_state.get("template")
     document = protocol.render(template) if template else protocol.as_markdown()

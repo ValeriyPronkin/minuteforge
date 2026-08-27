@@ -29,7 +29,13 @@ from .config import Settings
 from .llm import LLMClient
 from .audio import ffmpeg_available
 from .people import merge_suggestions, mentioned_people, read_people
-from .pipeline import Meeting, protocol_from_transcript, save, transcribe_meeting
+from .pipeline import (
+    Meeting,
+    protocol_from_transcript,
+    save,
+    save_transcript,
+    transcribe_meeting,
+)
 from .transcribe import GATED_MODELS, MissingToken, RecognitionError, check_model_access
 
 
@@ -165,16 +171,6 @@ def load_transcript(path: Path) -> Transcript:
     return Transcript(consolidate(blocks_from_segments(segments)))
 
 
-def save_transcript(transcript: Transcript, path: Path) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = [
-        {"speaker": b.speaker, "text": b.text, "start": b.start, "end": b.end}
-        for b in transcript.blocks
-    ]
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    return path
-
-
 def describe_environment() -> list[tuple[bool, str]]:
     """Что установлено и увидит ли расчёт видеокарту.
 
@@ -278,14 +274,15 @@ def command_recognize(args: argparse.Namespace) -> int:
         args.source, settings, work_dir=work_dir,
         diarize=not args.no_diarize, progress=print_step, fresh=args.fresh,
     )
-    path = save_transcript(transcript, Path(work_dir) / f"{args.source.stem}_segments.json")
+    paths = save_transcript(transcript, work_dir, stem=f"{args.source.stem}_transcript")
 
     for note in getattr(transcript, "notes", []):
         print(f"  ВНИМАНИЕ: не хватило видеопамяти — {note}")
     print(f"Реплик: {len(transcript.blocks)}, говорящих: {len(transcript.speakers)}")
     print(f"Метки: {', '.join(transcript.speakers)}")
-    print(f"Стенограмма: {path}")
-    print("Дальше: minuteforge protocol", path, '--name SPEAKER_00="Фамилия И.О."')
+    print(f"Стенограмма текстом: {paths['text']}")
+    print(f"Стенограмма для расчёта: {paths['json']}")
+    print("Дальше: minuteforge protocol", paths["json"], '--name SPEAKER_00="Фамилия И.О."')
     return 0
 
 

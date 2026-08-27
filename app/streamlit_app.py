@@ -449,9 +449,12 @@ def running_version() -> str:
     try:
         out = subprocess.run(
             ["git", "-C", str(ROOT), "log", "-1", "--format=%h %s"],
-            capture_output=True, text=True, timeout=3,
+            capture_output=True, timeout=3,
         )
-        return out.stdout.strip() or "версия неизвестна"
+        # Байты, а не text=True: git отдаёт UTF-8, а Python на Windows
+        # декодирует по локали — русский заголовок коммита превращается в
+        # кракозябры.
+        return out.stdout.decode("utf-8", "replace").strip() or "версия неизвестна"
     except Exception:
         return "версия неизвестна"
 

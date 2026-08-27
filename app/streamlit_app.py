@@ -293,10 +293,25 @@ if source_path is not None or uploaded is not None:
     if source_path is not None:
         size = source_path.stat().st_size / 1024 / 1024
         st.write(f"Файл: `{source_path}` — {size:.0f} МБ, читается с диска.")
-    elif uploaded.type.startswith("audio"):
-        st.audio(uploaded)
     else:
-        st.video(uploaded)
+        st.write(f"Загружено: `{uploaded.name}`")
+
+    # Плеер по требованию, а не всегда: работать он не помогает, а занимает
+    # пол-экрана и тянет файл в браузер. Ставится галочкой, чтобы код с
+    # видео вообще не выполнялся, пока его не попросят, — в раскрывающемся
+    # блоке содержимое строится всё равно.
+    if st.checkbox("Посмотреть запись", key="preview"):
+        if source_path is not None and size > 300:
+            st.caption(
+                f"Файл на {size:.0f} МБ — проигрывать его в браузере незачем: "
+                "откройте обычным плеером, если нужно свериться."
+            )
+        elif source_path is not None:
+            st.video(str(source_path))
+        elif uploaded.type.startswith("audio"):
+            st.audio(uploaded)
+        else:
+            st.video(uploaded)
 
     if st.button("Распознать", type="primary"):
         WORK_DIR.mkdir(parents=True, exist_ok=True)

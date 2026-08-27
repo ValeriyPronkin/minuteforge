@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -68,6 +69,48 @@ def full_width() -> dict:
     return {}
 
 
+def pick_file_dialog() -> str | None:
+    """Открывает обычный системный диалог выбора файла.
+
+    Браузер путь к файлу не отдаёт и отдать не может — это его устройство,
+    страница не должна знать, что лежит на диске. Поэтому загрузка через
+    браузер всегда означает копирование гигабайтов, и обойти это в нём
+    нельзя.
+
+    Но приложение работает на той же машине, где лежит запись, и диалог
+    можно открыть напрямую — так же, как это делало прежнее приложение.
+    Возвращается путь, копировать нечего.
+
+    Диалог запускается отдельным процессом: tkinter не любит, когда его
+    зовут из потока streamlit, и на macOS от этого просто виснет.
+    """
+    code = (
+        "import tkinter as tk\n"
+        "from tkinter import filedialog\n"
+        "root = tk.Tk()\n"
+        "root.withdraw()\n"
+        "root.attributes('-topmost', True)\n"
+        "print(filedialog.askopenfilename(\n"
+        "    title='Выберите запись совещания',\n"
+        "    filetypes=[('Видео и аудио', '*.mp4 *.avi *.mov *.mkv *.webm *.wav *.m4a *.mp3'),\n"
+        "               ('Все файлы', '*.*')]))\n"
+    )
+    try:
+        done = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, timeout=600
+        )
+    except Exception as exc:
+        st.error(f"Не удалось открыть диалог выбора файла: {exc}")
+        return None
+    if done.returncode != 0:
+        st.error(
+            "Не удалось открыть диалог выбора файла — в этой сборке Python нет "
+            "tkinter. Впишите путь вручную в блоке ниже."
+        )
+        return None
+    return done.stdout.strip() or None
+
+
 class Live:
     """Показ хода работы: что идёт сейчас и что уже сделано.
 
@@ -119,44 +162,49 @@ def transcript_from_state() -> Transcript | None:
 with st.sidebar:
     st.header("Запись")
 
-    # Главный путь — файл, который уже лежит на этой машине. Загрузка через
-    # браузер гонит гигабайты видео в память сервера и потом копирует их на
-    # диск, хотя приложение работает там же, где запись. На часовом
-    # совещании это минуты ожидания на ровном месте.
+    # Выбор файла системным диалогом: запись остаётся на месте, расчёт
+    # читает её оттуда. Загрузка через браузер оставлена запасным путём —
+    # она копирует гигабайты и нужна, только если запись на другой машине.
+    if st.button("Выбрать файл…", **full_width()):
+        chosen = pick_file_dialog()
+        if chosen:
+            st.session_state["source_path"] = chosen
+
     found = sorted(
         path for path in INPUT_DIR.glob("*")
         if path.suffix.lower() in MEDIA_SUFFIXES
     ) if INPUT_DIR.exists() else []
-
-    picked = st.selectbox(
-        "Файл на этой машине",
-        ["", *[str(path.name) for path in found]],
-        format_func=lambda name: name or f"— выбрать из {INPUT_DIR} —",
-    ) if found else ""
-
-    typed = st.text_input(
-        "…либо полный путь",
-        placeholder=r"D:\meetings\meeting.mp4",
-        help="Файл не копируется и никуда не загружается: расчёт читает его "
-        "с диска там, где он лежит.",
-    )
-
-    uploaded = st.file_uploader(
-        "…либо загрузить",
-        type=["mp4", "avi", "mov", "mkv", "wav", "m4a", "mp3"],
-        help="Нужно только если запись лежит не на этой машине. Загрузка "
-        "часового видео занимает минуты и удваивает его на диске.",
-    )
-    ready_segments = st.file_uploader("…либо готовая стенограмма (json)", type=["json"])
+    if found:
+        picked = st.selectbox(
+            f"…либо из {INPUT_DIR.name}",
+            ["", *[path.name for path in found]],
+            format_func=lambda name: name or "— не выбрано —",
+        )
+        if picked:
+            st.session_state["source_path"] = str(INPUT_DIR / picked)
 
     source_path: Path | None = None
-    if typed.strip():
-        source_path = Path(typed.strip().strip('"'))
-        if not source_path.exists():
-            st.error(f"Файл не найден: {source_path}")
-            source_path = None
-    elif picked:
-        source_path = INPUT_DIR / picked
+    stored = st.session_state.get("source_path")
+    if stored:
+        candidate = Path(stored)
+        if candidate.exists():
+            source_path = candidate
+        else:
+            st.error(f"Файл не найден: {candidate}")
+            st.session_state.pop("source_path", None)
+
+    uploaded = None
+    with st.expander("Запись на другой машине"):
+        st.caption(
+            "Загрузка через браузер копирует файл целиком: на часовом видео "
+            "это минуты ожидания и вторая копия на диске. Нужна, только если "
+            "записи нет на этой машине."
+        )
+        uploaded = st.file_uploader(
+            "Загрузить", type=["mp4", "avi", "mov", "mkv", "wav", "m4a", "mp3"]
+        )
+
+    ready_segments = st.file_uploader("Готовая стенограмма (json)", type=["json"])
 
     st.header("Документ")
     roster_file = st.file_uploader(

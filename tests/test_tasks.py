@@ -147,24 +147,33 @@ def test_different_tasks_are_not_merged():
 
 
 def test_extract_walks_every_chunk():
-    chunks = [Chunk([Block("Иванов", f"Реплика {i}")], index=i, total=3) for i in (1, 2, 3)]
+    # В тексте фрагментов есть слова поручений: выписанное из воздуха
+    # отсеивается проверкой на выдумку, и это правильно.
+    chunks = [
+        Chunk([Block("Иванов", "Подготовьте отчётность по первому вопросу.")], index=1, total=3),
+        Chunk([Block("Иванов", "Обсуждение без поручений.")], index=2, total=3),
+        Chunk([Block("Петров", "Направьте документы по второму вопросу.")], index=3, total=3),
+    ]
     client = FakeClient(
-        "Поручение: Первое\nКому: Иванов",
+        "Поручение: Подготовить отчётность\nКому: Иванов",
         NOTHING_FOUND,
-        "Поручение: Второе\nКому: Петров",
+        "Поручение: Направить документы\nКому: Петров",
     )
     tasks = extract_tasks(chunks, client)
     assert len(client.prompts) == 3
-    assert [t.what for t in tasks] == ["Первое", "Второе"]
+    assert [t.what for t in tasks] == ["Подготовить отчётность", "Направить документы"]
 
 
 def test_failed_chunk_does_not_lose_the_whole_run():
     """Терять час работы из-за одного сбоя хуже, чем недосчитаться поручений
     из одного фрагмента."""
-    chunks = [Chunk([Block("И", "раз")], index=i, total=2) for i in (1, 2)]
-    client = FakeClient(LLMError("сервер устал"), "Поручение: Уцелевшее")
+    chunks = [
+        Chunk([Block("И", "Первый вопрос повестки, обсуждение.")], index=1, total=2),
+        Chunk([Block("И", "Подготовьте справку по инцидентам за квартал.")], index=2, total=2),
+    ]
+    client = FakeClient(LLMError("сервер устал"), "Поручение: Подготовить справку по инцидентам")
     tasks = extract_tasks(chunks, client)
-    assert [t.what for t in tasks] == ["Уцелевшее"]
+    assert [t.what for t in tasks] == ["Подготовить справку по инцидентам"]
 
 
 def test_strict_mode_reraises():
@@ -297,3 +306,69 @@ def test_json_example_in_the_prompt_parses_by_our_own_rules():
 def test_line_format_still_works_when_json_is_not_used():
     """Сервер может не уметь строгий JSON — тогда остаётся разбор по строкам."""
     assert parse_tasks("Поручение: Сделать\nКому: Иванов")[0].who == "Иванов"
+
+
+# ------------------------------------------------ проверка на выдумку
+
+FRAGMENT = (
+    "Орлов В.П.: Просьба проанализировать невыбранные лимиты и доложить на "
+    "следующем совещании. Ким С.А.: Направим письмо в министерство сегодня."
+)
+
+
+def test_invented_task_is_dropped():
+    """Модель, потерявшая нить, сочиняет правдоподобные поручения из ничего.
+    Отличить их можно ровно одним способом: посмотреть, есть ли эти слова в
+    стенограмме.
+    """
+    from minuteforge.tasks import grounded
+
+    real = Task("Проанализировать невыбранные лимиты", "Орлов В.П.", "")
+    invented = Task("Подготовить презентацию для инвестиционного комитета", "Assistant", "")
+
+    assert grounded(real, FRAGMENT)
+    assert not grounded(invented, FRAGMENT)
+
+
+def test_paraphrase_survives():
+    """Модель имеет право переформулировать: требовать дословности значило
+    бы выбрасывать хорошие поручения."""
+    from minuteforge.tasks import grounded
+
+    task = Task("Направить письмо в министерство", "", "сегодня")
+    assert grounded(task, FRAGMENT)
+
+
+def test_english_answer_is_dropped():
+    """На русской стенограмме мелкая модель то и дело сваливается в
+    английский, и просьбы в промпте этого не отменяют."""
+    from minuteforge.tasks import is_russian
+
+    assert not is_russian("Analyze the presentation given by the speaker")
+    assert is_russian("Проанализировать невыбранные лимиты")
+
+
+def test_sentence_in_the_assignee_field_is_cleared():
+    """Модель кладёт туда целые предложения: «The team should analyze the
+    current status…». В графе «Исполнитель» такому не место."""
+    from minuteforge.tasks import clean_assignee
+
+    long_one = "The team should analyze the current status of the projects and report"
+    assert clean_assignee(long_one, FRAGMENT) == ""
+    assert clean_assignee("Ким С.А.", FRAGMENT) == "Ким С.А."
+
+
+def test_assignee_who_was_never_mentioned_is_cleared():
+    """Выдуманный адресат хуже пустого поля: поручение уйдёт не тому."""
+    from minuteforge.tasks import clean_assignee
+
+    assert clean_assignee("Ассистент", FRAGMENT) == ""
+
+
+def test_assignee_named_elsewhere_in_the_meeting_survives():
+    """Человека представляют один раз, в начале, а поручение он получает
+    часом позже — сверяться нужно со всей стенограммой, а не с фрагментом."""
+    from minuteforge.tasks import clean_assignee
+
+    corpus = "У нас на связи Белянина Ольга Евгеньевна, министр экологии. " + FRAGMENT
+    assert clean_assignee("Белянина", corpus) == "Белянина"

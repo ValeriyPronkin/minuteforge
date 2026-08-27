@@ -253,6 +253,69 @@ def parse_tasks(answer: str, *, chunk: int = 0) -> list[Task]:
     return []
 
 
+def is_russian(text: str) -> bool:
+    """Русский ли это текст.
+
+    Мелкая модель на русской стенограмме то и дело сваливается в английский,
+    и никакие просьбы в промпте этого не отменяют. Проверка механическая:
+    считаем долю кириллицы среди букв.
+    """
+    letters = [c for c in (text or "") if c.isalpha()]
+    if not letters:
+        return False
+    cyrillic = sum(1 for c in letters if "а" <= c.lower() <= "я" or c.lower() == "ё")
+    return cyrillic / len(letters) >= 0.5
+
+
+def _significant(text: str) -> set[str]:
+    """Слова, по которым можно узнать, о том ли речь.
+
+    Короткие отбрасываются: «в», «на», «для» есть в любом тексте и ничего не
+    доказывают. Берётся начало слова, чтобы падежи не мешали: «поручение» и
+    «поручения» — одно и то же.
+    """
+    return {word[:6] for word in re.findall(r"\w{5,}", (text or "").lower())}
+
+
+def grounded(task: Task, source: str) -> bool:
+    """Опирается ли поручение на текст, из которого взято.
+
+    Это и есть проверка на выдумку. Модель, потерявшая нить, сочиняет
+    правдоподобные поручения из ничего — «Analyze the presentation,
+    исполнитель Assistant, срок 2022-08-15» — и отличить их от настоящих
+    можно ровно одним способом: посмотреть, есть ли эти слова в стенограмме.
+
+    Порог невысокий: модель имеет право переформулировать, и требовать
+    дословности значило бы выбрасывать хорошие поручения.
+    """
+    words = _significant(task.what)
+    if not words:
+        return False
+    found = words & _significant(source)
+    return len(found) / len(words) >= 0.3
+
+
+def clean_assignee(who: str, source: str) -> str:
+    """Оставляет исполнителя, только если он в стенограмме и похож на имя.
+
+    Модель кладёт в это поле целые предложения — «The team should analyze
+    the current status…» — и выдумывает адресатов, которых на совещании не
+    было. Ни то, ни другое в графу «Исполнитель» не годится.
+    """
+    who = (who or "").strip()
+    if not who:
+        return ""
+    if len(who.split()) > 6:
+        return ""  # это предложение, а не исполнитель
+    if not is_russian(who):
+        return ""
+    known = _significant(source)
+    words = _significant(who)
+    if words and not (words & known):
+        return ""  # такого на совещании не называли
+    return who
+
+
 def extract_tasks(
     chunks: Sequence[Chunk],
     client: LLMClient,
@@ -260,6 +323,7 @@ def extract_tasks(
     skip_failed: bool = True,
     progress: Progress | None = None,
     answers: list[str] | None = None,
+    corpus: str | None = None,
 ) -> list[Task]:
     """Проходит по кускам стенограммы и собирает поручения.
 
@@ -270,6 +334,10 @@ def extract_tasks(
     :param progress: куда сообщать о ходе. Местная модель отвечает по
         десятку секунд на фрагмент, и на длинном совещании это минуты
         тишины, за которые человек успевает решить, что всё повисло.
+    :param corpus: вся стенограмма целиком — по ней проверяются исполнители.
+        Человека называют один раз, в начале совещания, а поручение он
+        получает часом позже, в другом фрагменте; сверяться только с
+        фрагментом значило бы вычёркивать верные имена.
     :param answers: куда сложить ответы модели как есть. Когда поручений не
         нашлось, это единственный способ понять почему: модель могла
         ответить прозой, по-английски или пересказать задание вместо
@@ -306,7 +374,11 @@ def extract_tasks(
 
         if answers is not None:
             answers.append(reply.text)
-        found = parse_tasks(reply.text, chunk=chunk.index)
+        found = _keep_sound(
+            parse_tasks(reply.text, chunk=chunk.index),
+            chunk.text,
+            corpus or chunk.text,
+        )
         logger.info(
             "Фрагмент {}/{}: поручений {}, ответ за {} с",
             chunk.index, chunk.total, len(found), reply.elapsed_s,
@@ -321,6 +393,30 @@ def extract_tasks(
         ))
 
     return dedupe(collected)
+
+
+def _keep_sound(tasks: list[Task], source: str, corpus: str) -> list[Task]:
+    """Отсеивает выдуманное и подчищает исполнителей.
+
+    Поручение сверяется с тем фрагментом, откуда взято, а исполнитель — со
+    всей стенограммой: человека представляют один раз, а поручения он
+    получает потом.
+    """
+    kept: list[Task] = []
+    for task in tasks:
+        if not is_russian(task.what):
+            logger.info("Отброшено не по-русски: {}", task.what[:80])
+            continue
+        if not grounded(task, source):
+            logger.warning("Отброшено как выдуманное, в стенограмме нет: {}", task.what[:80])
+            continue
+        kept.append(Task(
+            what=task.what,
+            who=clean_assignee(task.who, corpus),
+            due=task.due if is_russian(task.due) or not task.due else "",
+            chunk=task.chunk,
+        ))
+    return kept
 
 
 def dedupe(tasks: Iterable[Task]) -> list[Task]:

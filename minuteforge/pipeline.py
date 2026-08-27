@@ -221,7 +221,10 @@ def protocol_from_transcript(
     logger.info("Стенограмма разбита на {} фрагментов", len(chunks))
 
     answers: list[str] = []
-    tasks = extract_tasks(chunks, client, progress=progress, answers=answers)
+    tasks = extract_tasks(
+        chunks, client, progress=progress, answers=answers,
+        corpus=named.as_text(),
+    )
     logger.info("Найдено поручений: {}", len(tasks))
 
     return build_protocol(
@@ -298,8 +301,9 @@ def save(
     protocol: Protocol,
     out_dir: str | Path,
     *,
-    stem: str = "protocol",
+    stem: str = "протокол",
     template: str | Path | None = None,
+    with_transcript: bool = True,
 ) -> dict[str, Path]:
     """Сохраняет протокол, стенограмму и таблицу поручений.
 
@@ -311,6 +315,9 @@ def save(
     :param template: форма протокола. Задана — документ собирается по ней,
         нет — по встроенной разметке. Своя форма есть в каждой организации,
         и снаружи её не угадать.
+    :param with_transcript: сохранять ли стенограмму. Если её уже сохранили
+        на шаге распознавания, второй раз не нужно: одна и та же расшифровка
+        под двумя именами в одной папке только сбивает с толку.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -326,14 +333,14 @@ def save(
     document = out_dir / f"{stem}{suffix}"
     document.write_text(document_text, encoding="utf-8")
 
-    table = out_dir / f"{stem}_tasks.csv"
+    table = out_dir / f"{stem}_поручения.csv"
     # BOM: без него Excel в русской локали открывает таблицу кракозябрами.
     table.write_text(protocol.tasks_csv(), encoding="utf-8-sig")
 
     saved = {"protocol": document, "tasks": table}
 
-    if protocol.transcript is not None:
-        transcript = out_dir / f"{stem}_transcript.txt"
+    if with_transcript and protocol.transcript is not None:
+        transcript = out_dir / f"{stem}_стенограмма.txt"
         transcript.write_text(
             protocol.transcript.as_text(with_time=True), encoding="utf-8"
         )

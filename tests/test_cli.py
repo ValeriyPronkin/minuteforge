@@ -14,7 +14,7 @@ from minuteforge.blocks import Block, Transcript
 from minuteforge.config import Settings
 
 SEGMENTS = [
-    {"speaker": "SPEAKER_00", "text": "Подготовьте план до пятницы.", "start": 0, "end": 6},
+    {"speaker": "SPEAKER_00", "text": "Сергей Ким, подготовьте план до пятницы.", "start": 0, "end": 6},
     {"speaker": "SPEAKER_01", "text": "Принято.", "start": 6, "end": 8},
 ]
 
@@ -97,10 +97,10 @@ def test_protocol_command_writes_both_files(segments_file, tmp_path, fake_llm, c
         "--date", "05.06.2025",
     ])
     assert code == 0
-    assert (tmp_path / "out" / "protocol.md").exists()
-    assert (tmp_path / "out" / "protocol_tasks.csv").exists()
+    assert (tmp_path / "out" / "протокол.md").exists()
+    assert (tmp_path / "out" / "протокол_поручения.csv").exists()
 
-    document = (tmp_path / "out" / "protocol.md").read_text(encoding="utf-8")
+    document = (tmp_path / "out" / "протокол.md").read_text(encoding="utf-8")
     assert "Орлов В.П." in document
     assert "05.06.2025" in document
     assert "Поручений: 1" in capsys.readouterr().out

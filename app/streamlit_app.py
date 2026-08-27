@@ -450,6 +450,7 @@ if source_path is not None or uploaded is not None:
             ]
             # Кладём сразу в папку: «Загрузки» на этой машине — не то место,
             # откуда стенограмму заберёт другое подразделение.
+            st.session_state["stem"] = source.stem
             saved = save_transcript(transcript, out_dir, stem=f"{source.stem}_стенограмма")
             st.session_state["saved_transcript"] = saved
         except MissingToken as exc:
@@ -609,17 +610,17 @@ if st.button("Собрать протокол", type="primary"):
     template_text = (
         template_file.getvalue().decode("utf-8-sig") if template_file is not None else None
     )
-    written = save(
-        protocol, out_dir,
-        stem="протокол",
-        template=st.session_state.get("template_path"),
-    ) if template_text is None else None
-    if written is None:
-        # Форму передали файлом: сохраняем то, что вышло после подстановки.
+    # Имя записи в начале каждого файла: иначе второе совещание молча
+    # затрёт первое. Стенограмма уже сохранена на шаге распознавания —
+    # второй раз не пишем.
+    stem = st.session_state.get("stem", "совещание")
+    if template_text is None:
+        written = save(protocol, out_dir, stem=stem, with_transcript=False)
+    else:
         out_dir.mkdir(parents=True, exist_ok=True)
-        document = out_dir / "протокол.md"
+        document = out_dir / f"{stem}_протокол.md"
         document.write_text(protocol.render(template_text), encoding="utf-8")
-        tasks = out_dir / "поручения.csv"
+        tasks = out_dir / f"{stem}_поручения.csv"
         tasks.write_text(protocol.tasks_csv(), encoding="utf-8-sig")
         written = {"protocol": document, "tasks": tasks}
     st.session_state["saved_protocol"] = written

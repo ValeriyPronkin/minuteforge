@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -25,6 +27,7 @@ from .protocol import Protocol, build_protocol
 from .tasks import extract_tasks
 from .transcribe import (
     STEP_TITLES,
+    RecognitionError,
     Backend,
     Progress,
     Step,
@@ -64,6 +67,24 @@ class Meeting:
     people: Sequence[Person] | None = None
 
 
+def cache_dir_for(source: Path, work_dir: Path) -> Path:
+    """Своя папка промежуточных шагов для каждой записи.
+
+    Шаги распознавания сохраняются, чтобы сбой на последнем не стоил сорока
+    минут работы. Но складывать их под одними и теми же именами в общую
+    папку нельзя: следующая запись подхватит чужую расшифровку и выдаст её
+    за свою — молча, за секунду и с полной уверенностью.
+
+    Отпечаток берётся из имени, размера и времени изменения файла. Читать
+    гигабайты ради хеша незачем: подменить запись, сохранив всё три
+    признака, можно только нарочно.
+    """
+    stat = source.stat()
+    mark = f"{source.name}|{stat.st_size}|{int(stat.st_mtime)}"
+    short = hashlib.sha1(mark.encode("utf-8")).hexdigest()[:8]
+    return work_dir / f"{source.stem}-{short}"
+
+
 def transcribe_meeting(
     source: str | Path,
     settings: Settings | None = None,
@@ -72,25 +93,34 @@ def transcribe_meeting(
     work_dir: str | Path | None = None,
     diarize: bool = True,
     progress: Progress | None = None,
+    fresh: bool = False,
 ) -> Transcript:
     """Из записи — стенограмма. Самый долгий шаг, и единственный с видеокартой.
 
     :param progress: куда сообщать о ходе работы: часовая запись считается
         десятки минут, и человеку нужно видеть, что она считается.
+    :param fresh: считать заново, не заглядывая в сохранённые шаги.
     """
     settings = settings or Settings()
     source = Path(source)
+    if not source.exists():
+        raise RecognitionError(f"Файл не найден: {source}")
+
     work_dir = Path(work_dir) if work_dir else source.parent
+    cache = cache_dir_for(source, work_dir)
+    if fresh and cache.exists():
+        shutil.rmtree(cache)
+    cache.mkdir(parents=True, exist_ok=True)
 
     audio = source
     if source.suffix.lower() in VIDEO_SUFFIXES:
         title = STEP_TITLES["audio"]
         report(progress, Step(name="audio", title=title, share=0.0))
-        audio = extract_audio(source, work_dir / f"{source.stem}.wav")
+        audio = extract_audio(source, cache / f"{source.stem}.wav")
         report(progress, Step(name="audio", title=title, done=True, share=0.05))
 
     recognition = recognize(
-        audio, settings, backend=backend, cache_dir=work_dir,
+        audio, settings, backend=backend, cache_dir=cache,
         diarize=diarize, progress=progress,
     )
     blocks = consolidate(blocks_from_segments(recognition.segments))

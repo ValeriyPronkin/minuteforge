@@ -89,7 +89,11 @@ class Live:
         minutes, seconds = divmod(int(time.monotonic() - self.started), 60)
         clock = f"{minutes}:{seconds:02d}"
         if step.done:
-            mark = "взят готовым" if step.reused else f"{step.elapsed_s} с"
+            mark = (
+                "не считался: взят из сохранённого расчёта этой же записи"
+                if step.reused
+                else f"{step.elapsed_s} с"
+            )
             self.done.append(f"{step.title} — {mark}")
             if self.status is not None:
                 self.status.write(f"{step.title} — {mark}")
@@ -313,6 +317,13 @@ if source_path is not None or uploaded is not None:
         else:
             st.video(uploaded)
 
+    fresh = st.checkbox(
+        "Считать заново",
+        help="Обычно готовые шаги берутся из сохранённого — так сбой на "
+        "последнем шаге не стоит сорока минут работы. Отметьте, если хотите "
+        "пересчитать эту запись с нуля.",
+    )
+
     if st.button("Распознать", type="primary"):
         WORK_DIR.mkdir(parents=True, exist_ok=True)
         if source_path is not None:
@@ -325,7 +336,7 @@ if source_path is not None or uploaded is not None:
         live = Live("Готовлюсь…")
         try:
             transcript = transcribe_meeting(
-                source, settings, work_dir=WORK_DIR, progress=live
+                source, settings, work_dir=WORK_DIR, progress=live, fresh=fresh
             )
             live.finish("Распознавание закончено")
             st.session_state["segments"] = [

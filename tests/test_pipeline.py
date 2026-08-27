@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -26,13 +27,19 @@ ANSWER = """Поручение: Подготовить план работ по 
 
 
 class FakeBackend:
+    def __init__(self):
+        self.calls: list[str] = []
+
     def transcribe(self, audio, **kwargs):
+        self.calls.append("transcribe")
         return {"segments": SEGMENTS, "language": "ru"}
 
     def align(self, segments, **kwargs):
+        self.calls.append("align")
         return {"segments": SEGMENTS}
 
     def diarize(self, audio, aligned, **kwargs):
+        self.calls.append("diarize")
         return {"segments": SEGMENTS}
 
 
@@ -173,11 +180,16 @@ def test_table_is_written_with_bom_for_excel(tmp_path):
 
 
 def test_steps_are_cached_between_runs(audio, with_token, tmp_path):
+    from minuteforge.pipeline import cache_dir_for
+
     settings = Settings(device="cpu")
     transcribe_meeting(audio, settings, backend=FakeBackend(), work_dir=tmp_path)
-    assert (tmp_path / "transcription.json").exists()
 
-    saved = json.loads((tmp_path / "segments.json").read_text(encoding="utf-8"))
+    cache = cache_dir_for(audio, tmp_path)
+    assert (cache / "transcription.json").exists()
+    assert cache.name.startswith("meeting-"), "у каждой записи своя папка"
+
+    saved = json.loads((cache / "segments.json").read_text(encoding="utf-8"))
     assert saved["segments"][0]["speaker"] == "SPEAKER_00"
 
 
@@ -231,3 +243,87 @@ def test_unknown_placeholder_is_left_for_a_human(tmp_path):
     )
     assert "{{гриф_секретности}}" in document
     assert "Дата: 05.06.2025" in document
+
+
+# --------------------------------------------- своя папка на каждую запись
+
+def make_audio(tmp_path, name, content=b"wav"):
+    path = tmp_path / name
+    path.write_bytes(content)
+    return path
+
+
+def test_another_recording_is_not_given_a_previous_transcript(tmp_path, with_token):
+    """Самая опасная ошибка из возможных: расчёт молча выдаёт чужую
+    расшифровку за свою — за секунду и с полной уверенностью.
+    """
+    first = make_audio(tmp_path, "первое.wav")
+    second = make_audio(tmp_path, "второе.wav", b"another recording entirely")
+    work = tmp_path / "work"
+
+    transcribe_meeting(first, Settings(device="cpu"), backend=FakeBackend(), work_dir=work)
+
+    backend = FakeBackend()
+    transcribe_meeting(second, Settings(device="cpu"), backend=backend, work_dir=work)
+    assert backend.calls == ["transcribe", "align", "diarize"], "вторую запись надо считать"
+
+
+def test_the_same_recording_is_not_recomputed(tmp_path, with_token):
+    """Ради этого шаги и сохраняются: сбой на последнем не должен стоить
+    сорока минут работы."""
+    audio = make_audio(tmp_path, "meeting.wav")
+    work = tmp_path / "work"
+
+    transcribe_meeting(audio, Settings(device="cpu"), backend=FakeBackend(), work_dir=work)
+    backend = FakeBackend()
+    transcribe_meeting(audio, Settings(device="cpu"), backend=backend, work_dir=work)
+    assert backend.calls == []
+
+
+def test_changed_file_under_the_same_name_is_recomputed(tmp_path, with_token):
+    """Файл переписали, имя осталось — это другая запись."""
+    import os
+    import time
+
+    audio = make_audio(tmp_path, "meeting.wav")
+    work = tmp_path / "work"
+    transcribe_meeting(audio, Settings(device="cpu"), backend=FakeBackend(), work_dir=work)
+
+    audio.write_bytes(b"different content, different size")
+    os.utime(audio, (time.time() + 10, time.time() + 10))
+
+    backend = FakeBackend()
+    transcribe_meeting(audio, Settings(device="cpu"), backend=backend, work_dir=work)
+    assert backend.calls == ["transcribe", "align", "diarize"]
+
+
+def test_fresh_forces_a_recount(tmp_path, with_token):
+    audio = make_audio(tmp_path, "meeting.wav")
+    work = tmp_path / "work"
+    transcribe_meeting(audio, Settings(device="cpu"), backend=FakeBackend(), work_dir=work)
+
+    backend = FakeBackend()
+    transcribe_meeting(
+        audio, Settings(device="cpu"), backend=backend, work_dir=work, fresh=True
+    )
+    assert backend.calls == ["transcribe", "align", "diarize"]
+
+
+def test_extracted_audio_lands_in_the_recording_own_folder(tmp_path, with_token, monkeypatch):
+    """Иначе звук от одного видео достанется другому с тем же именем."""
+    video = tmp_path / "meeting.mp4"
+    video.write_bytes(b"video")
+    work = tmp_path / "work"
+    seen = {}
+
+    def fake_extract(source, target=None, **kwargs):
+        seen["target"] = Path(target)
+        Path(target).parent.mkdir(parents=True, exist_ok=True)
+        Path(target).write_bytes(b"wav")
+        return Path(target)
+
+    monkeypatch.setattr("minuteforge.pipeline.extract_audio", fake_extract)
+    transcribe_meeting(video, Settings(device="cpu"), backend=FakeBackend(), work_dir=work)
+
+    assert seen["target"].parent != work, "звук не должен ложиться в общую папку"
+    assert seen["target"].parent.name.startswith("meeting-")

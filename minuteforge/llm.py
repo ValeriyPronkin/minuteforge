@@ -109,6 +109,7 @@ class LLMClient:
         *,
         max_tokens: int | None = None,
         json_mode: bool = False,
+        schema: dict | None = None,
     ) -> Reply:
         """Задаёт модели один вопрос и возвращает ответ.
 
@@ -127,11 +128,15 @@ class LLMClient:
             "stream": False,
         }
         if json_mode:
-            # Сервер принуждает модель выдавать разбираемый JSON, отсекая на
-            # каждом шаге всё, что его сломает. Для мелкой модели это
-            # решающая разница: уговорами формат от неё не добиться, она
-            # просто продолжает текст, который видит.
-            payload["response_format"] = {"type": "json_object"}
+            # Схема, а не просто «какой-нибудь JSON». Разница решающая:
+            # получив свободу, мелкая модель выдаёт безупречно правильный
+            # JSON собственной выдумки — {"name": ..., "description": ...} —
+            # и наполовину по-английски. Схема отсекает на каждом шаге всё,
+            # что в неё не укладывается, и придумать свою структуру уже
+            # нельзя.
+            payload["response_format"] = _schema_format(schema) if schema else {
+                "type": "json_object"
+            }
 
         last_error: Exception | None = None
         for attempt in range(1, self.settings.llm_retries + 2):
@@ -161,9 +166,14 @@ class LLMClient:
                 continue
             if response.status_code != 200:
                 if json_mode and response.status_code in (400, 422):
-                    # Строгий JSON понимают не все серверы. Отказ от него —
-                    # не беда: разбор ответа умеет и строки, просто мелкая
-                    # модель справится хуже.
+                    # Уступаем по одной ступени: схему понимают не все
+                    # серверы, «просто JSON» — почти все, а строки понимают
+                    # везде. Терять сразу всё из-за старой версии Ollama
+                    # незачем.
+                    if payload.get("response_format", {}).get("type") == "json_schema":
+                        logger.info("Сервер не понял схему, пробую простой JSON")
+                        payload = {**payload, "response_format": {"type": "json_object"}}
+                        continue
                     logger.info("Сервер не понял строгий JSON, повторяю без него")
                     # Копией, а не правкой на месте: тот словарь уже ушёл в
                     # запрос, и менять его задним числом — верный способ
@@ -241,6 +251,14 @@ class LLMClient:
                 f"{self.settings.llm_model}"
             )
         return ""
+
+
+def _schema_format(schema: dict) -> dict:
+    """Просьба к серверу держать модель в рамках схемы."""
+    return {
+        "type": "json_schema",
+        "json_schema": {"name": "answer", "strict": True, "schema": schema},
+    }
 
 
 def _parse(response: Any, elapsed: float) -> Reply:

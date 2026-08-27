@@ -255,3 +255,30 @@ def test_address_with_a_path_is_left_alone():
 
     custom = LLMClient(Settings(llm_base_url="http://gpu.local/llm/openai"))
     assert custom.endpoint == "http://gpu.local/llm/openai/chat/completions"
+
+
+def test_schema_is_asked_of_the_server():
+    """Просто «какой-нибудь JSON» мелкой модели мало: она выдаёт безупречно
+    правильный JSON собственной выдумки — {"name": ..., "description": ...} —
+    и наполовину по-английски. Схема отсекает такое на каждом шаге.
+    """
+    session = FakeSession(answer('{"tasks": []}'))
+    schema = {"type": "object", "properties": {"tasks": {"type": "array"}}}
+    LLMClient(FAST, session).complete("s", "u", json_mode=True, schema=schema)
+
+    asked = session.calls[0]["json"]["response_format"]
+    assert asked["type"] == "json_schema"
+    assert asked["json_schema"]["schema"] == schema
+
+
+def test_server_without_schema_support_falls_back_by_one_step():
+    """Уступаем по ступени: схему понимают не все, «просто JSON» — почти
+    все, строки — везде. Терять сразу всё из-за старой версии незачем."""
+    session = FakeSession(
+        FakeResponse(status_code=400, text="json_schema is not supported"),
+        answer('{"tasks": []}'),
+    )
+    LLMClient(FAST, session).complete("s", "u", json_mode=True, schema={"type": "object"})
+
+    assert session.calls[0]["json"]["response_format"]["type"] == "json_schema"
+    assert session.calls[1]["json"]["response_format"]["type"] == "json_object"

@@ -431,3 +431,26 @@ def test_saved_paths_are_absolute(tmp_path, monkeypatch):
 
     written = save(Protocol(tasks=[]), "вывод", with_transcript=False)
     assert all(p.is_absolute() for p in written.values())
+
+
+def test_each_run_gets_its_own_folder(tmp_path):
+    """Второй прогон той же записи не должен затирать первый: без истории
+    сравнить настройки не с чем, а «стало лучше» на глаз не определяется."""
+    from datetime import datetime
+
+    from minuteforge.pipeline import run_dir
+
+    folder = run_dir(tmp_path, "совещание", stamp=datetime(2026, 8, 27, 16, 50))
+    assert folder.name == "2026-08-27_1650_совещание"
+    assert folder.parent == tmp_path.resolve()
+
+
+def test_second_protocol_does_not_overwrite_the_first(tmp_path):
+    """Внутри одного разбора протокол пересобирают по нескольку раз — с
+    другой моделью, с другим окном. Какой из них лучше, решает человек."""
+    first = save(Protocol(tasks=[]), tmp_path, stem="протокол", with_transcript=False)
+    second = save(Protocol(tasks=[]), tmp_path, stem="протокол", with_transcript=False)
+
+    assert first["protocol"].name == "протокол.md"
+    assert second["protocol"].name == "протокол_2.md"
+    assert first["protocol"].exists()

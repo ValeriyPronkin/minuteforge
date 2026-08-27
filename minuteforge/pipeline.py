@@ -13,6 +13,7 @@ import hashlib
 import json
 import shutil
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Sequence
 
@@ -262,6 +263,37 @@ def process(
     )
 
 
+def run_dir(out_dir: str | Path, stem: str, *, stamp: datetime | None = None) -> Path:
+    """Своя папка на каждый разбор: `2026-08-27_1650_совещание`.
+
+    Иначе второй прогон той же записи молча затирает первый, и сравнить
+    настройки не с чем — а сравнивать приходится постоянно, потому что
+    «стало лучше» на глаз не определяется.
+
+    Папка, а не длинные имена файлов: её целиком отдают в другое
+    подразделение, и в ней лежит всё по одному совещанию сразу. Дата первой
+    в имени — так проводник сортирует прогоны по порядку.
+    """
+    stamp = stamp or datetime.now()
+    return Path(out_dir).expanduser().resolve() / f"{stamp:%Y-%m-%d_%H%M}_{stem}"
+
+
+def _free_name(path: Path) -> Path:
+    """Не затирает то, что уже лежит рядом.
+
+    Внутри одного прогона протокол пересобирают по нескольку раз — с другой
+    моделью, с другим окном. Затирать предыдущий нельзя: сравнить будет не с
+    чем, а какой из них лучше, решает человек, а не последний запуск.
+    """
+    if not path.exists():
+        return path
+    for number in range(2, 100):
+        nearby = path.with_name(f"{path.stem}_{number}{path.suffix}")
+        if not nearby.exists():
+            return nearby
+    return path
+
+
 def save_transcript(
     transcript: Transcript,
     out_dir: str | Path,
@@ -279,10 +311,10 @@ def save_transcript(
     out_dir = Path(out_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    text = out_dir / f"{stem}.txt"
+    text = _free_name(out_dir / f"{stem}.txt")
     text.write_text(transcript.as_text(with_time=True), encoding="utf-8")
 
-    data = out_dir / f"{stem}.json"
+    data = _free_name(out_dir / f"{stem}.json")
     data.write_text(
         json.dumps(
             [
@@ -332,10 +364,10 @@ def save(
         document_text = protocol.as_markdown()
         suffix = ".md"
 
-    document = out_dir / f"{stem}{suffix}"
+    document = _free_name(out_dir / f"{stem}{suffix}")
     document.write_text(document_text, encoding="utf-8")
 
-    table = out_dir / f"{stem}_поручения.csv"
+    table = _free_name(out_dir / f"{stem}_поручения.csv")
     # BOM: без него Excel в русской локали открывает таблицу кракозябрами.
     table.write_text(protocol.tasks_csv(), encoding="utf-8-sig")
 

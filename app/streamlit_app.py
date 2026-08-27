@@ -40,6 +40,8 @@ from minuteforge.people import (  # noqa: E402
 from minuteforge.pipeline import (  # noqa: E402
     Meeting,
     protocol_from_transcript,
+    _free_name,
+    run_dir,
     save,
     save_transcript,
     transcribe_meeting,
@@ -433,6 +435,29 @@ settings = Settings(
 st.title("minuteforge")
 st.caption("Протокол видеосовещания с поручениями. Ничего не уходит с этой машины.")
 
+
+def running_version() -> str:
+    """Какая версия сейчас в памяти.
+
+    Streamlit перезапускает сценарий, но уже загруженные модули не
+    перечитывает: после обновления приложение может работать старым кодом, и
+    со стороны это выглядит как «изменения не появились». Строка внизу
+    отвечает на этот вопрос сразу.
+    """
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(ROOT), "log", "-1", "--format=%h %s"],
+            capture_output=True, text=True, timeout=3,
+        )
+        return out.stdout.strip() or "версия неизвестна"
+    except Exception:
+        return "версия неизвестна"
+
+
+st.caption(f"Версия в памяти: {running_version()}")
+
 with st.expander("Как это работает"):
     st.markdown(
         """
@@ -523,7 +548,11 @@ if source_path is not None or uploaded is not None:
             # Кладём сразу в папку: «Загрузки» на этой машине — не то место,
             # откуда стенограмму заберёт другое подразделение.
             st.session_state["stem"] = source.stem
-            saved = save_transcript(transcript, out_dir, stem=f"{source.stem}_стенограмма")
+            # Своя папка на каждый разбор: иначе второй прогон той же записи
+            # молча затирает первый, и сравнивать настройки не с чем.
+            folder = run_dir(out_dir, source.stem)
+            st.session_state["run_dir"] = folder
+            saved = save_transcript(transcript, folder, stem="стенограмма")
             st.session_state["saved_transcript"] = saved
         except MissingToken as exc:
             st.error(str(exc))
@@ -690,17 +719,20 @@ if st.button("Собрать протокол", type="primary"):
     template_text = (
         template_file.getvalue().decode("utf-8-sig") if template_file is not None else None
     )
-    # Имя записи в начале каждого файла: иначе второе совещание молча
-    # затрёт первое. Стенограмма уже сохранена на шаге распознавания —
-    # второй раз не пишем.
-    stem = st.session_state.get("stem", "совещание")
+    # Всё по одному разбору лежит в своей папке. Стенограмма уже сохранена
+    # на шаге распознавания — второй раз не пишем.
+    stem = "протокол"
+    folder = st.session_state.get("run_dir") or run_dir(
+        out_dir, st.session_state.get("stem", "совещание")
+    )
+    st.session_state["run_dir"] = folder
     if template_text is None:
-        written = save(protocol, out_dir, stem=stem, with_transcript=False)
+        written = save(protocol, folder, stem=stem, with_transcript=False)
     else:
-        out_dir.mkdir(parents=True, exist_ok=True)
-        document = out_dir / f"{stem}_протокол.md"
+        folder.mkdir(parents=True, exist_ok=True)
+        document = _free_name(folder / f"{stem}.md")
         document.write_text(protocol.render(template_text), encoding="utf-8")
-        tasks = out_dir / f"{stem}_поручения.csv"
+        tasks = _free_name(folder / f"{stem}_поручения.csv")
         tasks.write_text(protocol.tasks_csv(), encoding="utf-8-sig")
         written = {"protocol": document, "tasks": tasks}
     st.session_state["saved_protocol"] = written

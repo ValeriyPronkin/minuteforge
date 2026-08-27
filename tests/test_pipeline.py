@@ -359,3 +359,60 @@ def test_roll_call_filter_can_be_turned_off():
         transcript_with_roll_call, Settings(drop_soundcheck=False), client=client
     )
     assert "как слышно" in client.prompts[0]
+
+
+def test_only_the_asked_part_is_extracted(tmp_path, with_token, monkeypatch):
+    """Первый час совещания уходит на перекличку — распознавать его значит
+    час работы видеокарты впустую."""
+    video = tmp_path / "meeting.mp4"
+    video.write_bytes(b"video")
+    seen = {}
+
+    def fake_extract(source, target=None, **kwargs):
+        seen.update(kwargs)
+        Path(target).parent.mkdir(parents=True, exist_ok=True)
+        Path(target).write_bytes(b"wav")
+        return Path(target)
+
+    monkeypatch.setattr("minuteforge.pipeline.extract_audio", fake_extract)
+    transcribe_meeting(
+        video, Settings(device="cpu"), backend=FakeBackend(),
+        work_dir=tmp_path, start="1:00:00", end="1:30:00",
+    )
+    assert seen["start"] == 3600
+    assert seen["duration"] == 1800
+
+
+def test_timestamps_stay_relative_to_the_whole_recording(tmp_path, with_token):
+    """По времени возвращаются к спорному месту в исходном видео: «12:30»
+    должно значить 12:30 записи, а не отрезка."""
+    audio = tmp_path / "meeting.wav"
+    audio.write_bytes(b"wav")
+
+    transcript = transcribe_meeting(
+        audio, Settings(device="cpu"), backend=FakeBackend(),
+        work_dir=tmp_path, start="1:00:00",
+    )
+    assert transcript.blocks[0].start == 3600.0
+
+
+def test_different_parts_of_one_file_do_not_share_a_cache(tmp_path, with_token):
+    """Распознав первый час, нельзя выдать его за второй только потому, что
+    файл тот же."""
+    audio = tmp_path / "meeting.wav"
+    audio.write_bytes(b"wav")
+
+    transcribe_meeting(audio, Settings(device="cpu"), backend=FakeBackend(),
+                       work_dir=tmp_path, start="0:00")
+    backend = FakeBackend()
+    transcribe_meeting(audio, Settings(device="cpu"), backend=backend,
+                       work_dir=tmp_path, start="1:00:00")
+    assert backend.calls == ["transcribe", "align", "diarize"]
+
+
+def test_backwards_range_is_an_error(tmp_path, with_token):
+    audio = tmp_path / "meeting.wav"
+    audio.write_bytes(b"wav")
+    with pytest.raises(Exception, match="распознавать нечего"):
+        transcribe_meeting(audio, Settings(device="cpu"), backend=FakeBackend(),
+                           work_dir=tmp_path, start="10:00", end="5:00")

@@ -28,6 +28,7 @@ from minuteforge.blocks import (  # noqa: E402
     blocks_from_segments,
     consolidate,
 )
+from minuteforge.audio import AudioError  # noqa: E402
 from minuteforge.config import HF_TOKEN_ENV, Settings  # noqa: E402
 from minuteforge.llm import LLMClient  # noqa: E402
 from minuteforge.people import (  # noqa: E402
@@ -411,6 +412,15 @@ if source_path is not None or uploaded is not None:
         else:
             st.video(uploaded)
 
+    span = st.columns(2)
+    from_time = span[0].text_input(
+        "Распознать с", placeholder="1:00:00",
+        help="Пусто — с начала. На совещании с десятками подключений первый "
+        "час уходит на перекличку: распознавать его — час работы видеокарты "
+        "впустую. Время в стенограмме останется от начала записи.",
+    )
+    to_time = span[1].text_input("по", placeholder="2:17:00")
+
     fresh = st.checkbox(
         "Считать заново",
         help="Обычно готовые шаги берутся из сохранённого — так сбой на "
@@ -430,7 +440,8 @@ if source_path is not None or uploaded is not None:
         live = Live("Готовлюсь…")
         try:
             transcript = transcribe_meeting(
-                source, settings, work_dir=WORK_DIR, progress=live, fresh=fresh
+                source, settings, work_dir=WORK_DIR, progress=live, fresh=fresh,
+                start=from_time or None, end=to_time or None,
             )
             live.finish("Распознавание закончено")
             st.session_state["segments"] = [
@@ -449,7 +460,7 @@ if source_path is not None or uploaded is not None:
                 "подробнее в README, раздел «Токен HuggingFace»."
             )
             st.stop()
-        except RecognitionError as exc:
+        except (RecognitionError, AudioError) as exc:
             st.error(str(exc))
             st.stop()
 

@@ -18,8 +18,9 @@ from typing import Sequence
 
 from loguru import logger
 
-from .audio import extract_audio
+from .audio import extract_audio, parse_time
 from .blocks import (
+    Block,
     Transcript,
     blocks_from_segments,
     consolidate,
@@ -74,7 +75,13 @@ class Meeting:
     people: Sequence[Person] | None = None
 
 
-def cache_dir_for(source: Path, work_dir: Path) -> Path:
+def cache_dir_for(
+    source: Path,
+    work_dir: Path,
+    *,
+    start: float | None = None,
+    end: float | None = None,
+) -> Path:
     """Своя папка промежуточных шагов для каждой записи.
 
     Шаги распознавания сохраняются, чтобы сбой на последнем не стоил сорока
@@ -87,7 +94,9 @@ def cache_dir_for(source: Path, work_dir: Path) -> Path:
     признака, можно только нарочно.
     """
     stat = source.stat()
-    mark = f"{source.name}|{stat.st_size}|{int(stat.st_mtime)}"
+    # Отрезок — часть приметы: распознав первый час, нельзя выдать его за
+    # второй только потому, что файл тот же.
+    mark = f"{source.name}|{stat.st_size}|{int(stat.st_mtime)}|{start or 0}|{end or 0}"
     short = hashlib.sha1(mark.encode("utf-8")).hexdigest()[:8]
     return work_dir / f"{source.stem}-{short}"
 
@@ -101,20 +110,35 @@ def transcribe_meeting(
     diarize: bool = True,
     progress: Progress | None = None,
     fresh: bool = False,
+    start: str | float | None = None,
+    end: str | float | None = None,
 ) -> Transcript:
     """Из записи — стенограмма. Самый долгий шаг, и единственный с видеокартой.
 
     :param progress: куда сообщать о ходе работы: часовая запись считается
         десятки минут, и человеку нужно видеть, что она считается.
     :param fresh: считать заново, не заглядывая в сохранённые шаги.
+    :param start, end: какой кусок записи распознавать — «1:05:30» или
+        секундами. Нужно чаще, чем кажется: на совещании с десятками
+        подключений первый час уходит на перекличку, и распознавать его —
+        час работы видеокарты впустую. Время в стенограмме при этом остаётся
+        от начала записи, а не от начала куска: иначе по нему не найти место
+        в исходном видео.
     """
     settings = settings or Settings()
     source = Path(source)
     if not source.exists():
         raise RecognitionError(f"Файл не найден: {source}")
 
+    from_second = parse_time(start)
+    to_second = parse_time(end)
+    if from_second is not None and to_second is not None and to_second <= from_second:
+        raise RecognitionError(
+            f"Конец отрезка ({end}) не позже начала ({start}) — распознавать нечего"
+        )
+
     work_dir = Path(work_dir) if work_dir else source.parent
-    cache = cache_dir_for(source, work_dir)
+    cache = cache_dir_for(source, work_dir, start=from_second, end=to_second)
     if fresh and cache.exists():
         shutil.rmtree(cache)
     cache.mkdir(parents=True, exist_ok=True)
@@ -123,7 +147,11 @@ def transcribe_meeting(
     if source.suffix.lower() in VIDEO_SUFFIXES:
         title = STEP_TITLES["audio"]
         report(progress, Step(name="audio", title=title, share=0.0))
-        audio = extract_audio(source, cache / f"{source.stem}.wav")
+        audio = extract_audio(
+            source, cache / f"{source.stem}.wav",
+            start=from_second,
+            duration=(to_second - (from_second or 0)) if to_second else None,
+        )
         report(progress, Step(name="audio", title=title, done=True, share=0.05))
 
     recognition = recognize(
@@ -131,6 +159,18 @@ def transcribe_meeting(
         diarize=diarize, progress=progress,
     )
     blocks = consolidate(blocks_from_segments(recognition.segments))
+    if from_second:
+        # Время сдвигается обратно к началу записи: по нему возвращаются к
+        # спорному месту в исходном видео, и «12:30» должно значить 12:30
+        # видео, а не отрезка.
+        blocks = [
+            Block(
+                b.speaker, b.text,
+                None if b.start is None else b.start + from_second,
+                None if b.end is None else b.end + from_second,
+            )
+            for b in blocks
+        ]
     logger.info(
         "Стенограмма: {} реплик, говорящих {}", len(blocks), len(Transcript(blocks).speakers)
     )

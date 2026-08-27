@@ -28,6 +28,29 @@ SAMPLE_RATE = 16_000
 CHANNELS = 1
 
 
+def parse_time(value: str | float | None) -> float | None:
+    """Разбирает «1:05:30», «65:30» и «3930» в секунды.
+
+    Человек указывает место в записи так, как видит его в плеере, и требовать
+    от него секунд — значит заставить считать в уме.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    parts = str(value).strip().split(":")
+    try:
+        numbers = [float(part) for part in parts]
+    except ValueError as exc:
+        raise AudioError(f"Не разобрать время: {value!r}. Ожидается 1:05:30 или 65:30") from exc
+
+    seconds = 0.0
+    for number in numbers:
+        seconds = seconds * 60 + number
+    return seconds
+
+
 class AudioError(RuntimeError):
     """Звук не удалось подготовить."""
 
@@ -49,6 +72,8 @@ def extract_audio(
     *,
     overwrite: bool = False,
     normalize: bool = True,
+    start: float | None = None,
+    duration: float | None = None,
     run: Runner = _run,
     which: Callable[[str], str | None] = shutil.which,
 ) -> Path:
@@ -60,6 +85,10 @@ def extract_audio(
         раскодирование часовой записи занимает минуты, и повторять его при
         каждом запуске незачем — но это же значит, что подменённое видео с
         прежним именем останется незамеченным.
+    :param start: с какой секунды записи брать звук. Нужно чаще, чем
+        кажется: на совещании с десятками подключений первый час уходит на
+        перекличку, и распознавать его — час работы видеокарты впустую.
+    :param duration: сколько секунд взять, считая от ``start``.
     :param normalize: выравнивать ли громкость. На записях совещаний разброс
         огромный: председатель у микрофона и участник в другом конце зала
         отличаются на десятки децибел, и тихого распознавание не слышит.
@@ -81,9 +110,15 @@ def extract_audio(
         )
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    command = [
-        "ffmpeg", "-y",
-        "-i", str(source),
+    command = ["ffmpeg", "-y"]
+    if start:
+        # Перед -i, а не после: так ffmpeg перематывает по ключевым кадрам и
+        # не раскодирует пропускаемый час.
+        command += ["-ss", f"{start:.3f}"]
+    command += ["-i", str(source)]
+    if duration:
+        command += ["-t", f"{duration:.3f}"]
+    command += [
         "-vn",                       # видеодорожка не нужна
         "-ac", str(CHANNELS),
         "-ar", str(SAMPLE_RATE),

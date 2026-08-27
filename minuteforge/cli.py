@@ -27,7 +27,7 @@ from loguru import logger
 from .blocks import Transcript, blocks_from_segments, consolidate
 from .config import Settings
 from .llm import LLMClient
-from .audio import ffmpeg_available
+from .audio import AudioError, ffmpeg_available
 from .people import merge_suggestions, mentioned_people, read_people
 from .pipeline import (
     Meeting,
@@ -60,6 +60,14 @@ def build_parser() -> argparse.ArgumentParser:
     recognize.add_argument("--model", default=None, help="модель Whisper: tiny…large-v3")
     recognize.add_argument("--language", default=None)
     recognize.add_argument("--speakers", type=int, default=None, help="сколько человек говорит")
+    recognize.add_argument(
+        "--from", dest="start", default=None, metavar="ВРЕМЯ",
+        help="распознавать с этого места: 1:05:30 или 3930",
+    )
+    recognize.add_argument(
+        "--to", dest="end", default=None, metavar="ВРЕМЯ",
+        help="и до этого; пусто — до конца записи",
+    )
     recognize.add_argument(
         "--fresh", action="store_true",
         help="пересчитать с нуля, не заглядывая в сохранённые шаги",
@@ -273,6 +281,7 @@ def command_recognize(args: argparse.Namespace) -> int:
     transcript = transcribe_meeting(
         args.source, settings, work_dir=work_dir,
         diarize=not args.no_diarize, progress=print_step, fresh=args.fresh,
+        start=args.start, end=args.end,
     )
     paths = save_transcript(transcript, work_dir, stem=f"{args.source.stem}_transcript")
 
@@ -408,7 +417,7 @@ def main(argv: list[str] | None = None) -> int:
         # трассировки, которая тут ничего не объясняет.
         print(str(exc), file=sys.stderr)
         return 2
-    except (RecognitionError, FileNotFoundError, ValueError) as exc:
+    except (RecognitionError, AudioError, FileNotFoundError, ValueError) as exc:
         print(f"Ошибка: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

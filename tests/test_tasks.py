@@ -532,12 +532,21 @@ def test_model_cannot_rewrite_or_invent_tasks():
     переписать чужое она не может."""
     from minuteforge.tasks import merge_similar
 
-    tasks = [Task("Направить письмо"), Task("Подготовить справку")]
+    tasks = [
+        Task("Направить письмо"),
+        Task("Подготовить справку"),
+        Task("Проконтролировать сроки"),
+        Task("Доложить на следующем совещании"),
+    ]
     merged = merge_similar(
         tasks,
-        merged_client('{"groups": [[1, 2]], "tasks": [{"what": "Выдуманное поручение"}]}'),
+        merged_client(
+            '{"groups": [[1, 2], [3], [4]], '
+            '"tasks": [{"what": "Выдуманное поручение"}]}'
+        ),
     )
-    assert [t.what for t in merged] == ["Подготовить справку"]
+    assert len(merged) == 3
+    assert not any("Выдуманное" in t.what for t in merged), "текст берётся только наш"
 
 
 def test_nonsense_grouping_is_ignored():
@@ -561,3 +570,39 @@ def test_failed_merge_leaves_everything_as_it_was():
 
     tasks = [Task("Первое"), Task("Второе")]
     assert merge_similar(tasks, Broken()) == tasks
+
+
+def test_wholesale_merging_is_rejected():
+    """Мелкая модель, не поняв задачи, валит всё в две-три кучи: список из
+    восемнадцати поручений превращается в пять. Это не повторы, это потеря
+    тринадцати, и в готовом протоколе её не заметишь — он выглядит просто
+    коротким.
+    """
+    from minuteforge.tasks import merge_similar
+
+    tasks = [Task(f"Поручение {i}") for i in range(1, 19)]
+    everything_in_two = '{"groups": [[1,2,3,4,5,6,7,8,9], [10,11,12,13,14,15,16,17,18]]}'
+
+    merged = merge_similar(tasks, merged_client(everything_in_two))
+    assert len(merged) == 18, "сведение должно быть отвергнуто целиком"
+
+
+def test_reasonable_merging_goes_through():
+    from minuteforge.tasks import merge_similar
+
+    tasks = [Task(f"Поручение {i}") for i in range(1, 11)]
+    merged = merge_similar(tasks, merged_client('{"groups": [[1,2],[3],[4],[5],[6],[7],[8],[9],[10]]}'))
+    assert len(merged) == 9
+
+
+def test_a_speech_in_the_due_field_is_cleared():
+    """Срок — это «до пятницы» или «15 сентября», а не абзац из доклада: в
+    таблице контроля он занимает три строки, ничего не сообщая."""
+    from minuteforge.tasks import clean_due
+
+    speech = (
+        "Сейчас, секунду. Комментариев уже неоднократно по Костромской области "
+        "мы слушали, вы просили подключиться, мы подключались"
+    )
+    assert clean_due(speech) == ""
+    assert clean_due("до конца следующей недели") == "до конца следующей недели"

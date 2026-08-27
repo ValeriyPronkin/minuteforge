@@ -310,6 +310,11 @@ def clean_due(due: str) -> str:
     due = (due or "").strip()
     if not due or not is_russian(due):
         return ""
+    if len(due.split()) > 8:
+        # Срок — это «до пятницы» или «15 сентября», а не абзац. Модель
+        # кладёт сюда кусок доклада, и в таблице контроля он занимает три
+        # строки, ничего при этом не сообщая.
+        return ""
     lowered = due.lower()
     if any(ch.isdigit() for ch in lowered):
         return due
@@ -576,10 +581,41 @@ def merge_similar(
         return tasks
 
     groups = _read_groups(reply.text, len(tasks))
+    if not _grouping_is_sane(groups, len(tasks)):
+        logger.warning(
+            "Сведение повторов отвергнуто: {} поручений свелись бы к {}. "
+            "Столько повторов в одном совещании не бывает — похоже, модель "
+            "сгруппировала неродственное. Оставляю список как есть.",
+            len(tasks), len(groups),
+        )
+        return tasks
+
     merged = [_merge_group(tasks, indexes) for indexes in groups]
     if len(merged) < len(tasks):
         logger.info("Повторы сведены: {} -> {}", len(tasks), len(merged))
     return merged
+
+
+#: Насколько список вправе сжаться. Повторы берутся с границ фрагментов, и
+#: их столько же, сколько границ: на семи фрагментах это единицы, а не
+#: две трети списка.
+MERGE_FLOOR = 0.6
+
+#: Больше трёх записей об одном поручении не бывает даже при нахлёсте.
+MERGE_MAX_GROUP = 3
+
+
+def _grouping_is_sane(groups: list[list[int]], count: int) -> bool:
+    """Похоже ли сведение на правду.
+
+    Мелкая модель, не поняв задачи, валит всё в две-три кучи — и список из
+    восемнадцати поручений превращается в пять. Это не повторы, это потеря
+    тринадцати поручений, и заметить её в готовом протоколе нельзя: он
+    выглядит просто коротким.
+    """
+    if len(groups) < count * MERGE_FLOOR:
+        return False
+    return all(len(group) <= MERGE_MAX_GROUP for group in groups)
 
 
 def _read_groups(answer: str, count: int) -> list[list[int]]:

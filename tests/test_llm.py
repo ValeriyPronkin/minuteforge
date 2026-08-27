@@ -237,3 +237,21 @@ def test_server_that_cannot_do_json_is_asked_again_without_it():
     assert reply.text == "Поручение: Сделать"
     assert "response_format" in session.calls[0]["json"]
     assert "response_format" not in session.calls[1]["json"], "второй раз просить незачем"
+
+
+def test_address_without_a_path_gets_v1_added():
+    """В поле адреса естественно вписать «http://localhost:11434» — так
+    Ollama и представляется. Без /v1 сервер отвечает 404, неотличимым от
+    «модель не найдена».
+    """
+    client = LLMClient(Settings(llm_base_url="http://localhost:11434"))
+    assert client.endpoint == "http://localhost:11434/v1/chat/completions"
+
+
+def test_address_with_a_path_is_left_alone():
+    """LM Studio и другие серверы могут жить по своему пути."""
+    client = LLMClient(Settings(llm_base_url="http://localhost:1234/v1/"))
+    assert client.endpoint == "http://localhost:1234/v1/chat/completions"
+
+    custom = LLMClient(Settings(llm_base_url="http://gpu.local/llm/openai"))
+    assert custom.endpoint == "http://gpu.local/llm/openai/chat/completions"

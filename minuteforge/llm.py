@@ -86,8 +86,21 @@ class LLMClient:
         return session
 
     @property
+    def base_url(self) -> str:
+        """Адрес API, дополненный, если человек ввёл его без пути.
+
+        В поле адреса естественно вписать «http://localhost:11434» — так
+        Ollama и представляется. Но запросы идут по OpenAI-совместимому
+        протоколу, где путь начинается с /v1, и без него сервер отвечает
+        404, неотличимым от «модель не найдена».
+        """
+        url = self.settings.llm_base_url.strip().rstrip("/")
+        path = urlparse(url).path.strip("/")
+        return url if path else f"{url}/v1"
+
+    @property
     def endpoint(self) -> str:
-        return f"{self.settings.llm_base_url.rstrip('/')}/chat/completions"
+        return f"{self.base_url}/chat/completions"
 
     def complete(
         self,
@@ -180,7 +193,7 @@ class LLMClient:
         отвечает иначе или это вовсе не Ollama. Это не ошибка: имя модели
         всегда можно вписать руками.
         """
-        url = f"{self.settings.llm_base_url.rstrip('/')}/models"
+        url = f"{self.base_url}/models"
         try:
             response = self._session.get(url, timeout=10)
             if getattr(response, "status_code", 0) != 200:

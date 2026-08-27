@@ -292,3 +292,25 @@ def test_truncated_answer_is_marked():
     })
     assert LLMClient(FAST, FakeSession(cut)).complete("s", "u").truncated is True
     assert LLMClient(FAST, FakeSession(answer("готово"))).complete("s", "u").truncated is False
+
+
+def test_server_context_limit_is_asked_of_ollama():
+    """Ollama держит собственный предел num_ctx, и всё сверх него молча
+    отрезает: модель просто не видит конца фрагмента."""
+    show = FakeResponse({
+        "model_info": {"llama.context_length": 32768},
+        "parameters": "num_ctx                        2048\nstop \"[INST]\"",
+    })
+    session = FakeSession(show)
+    window, limit = LLMClient(FAST, session).context_window()
+
+    assert (window, limit) == (32768, 2048)
+    assert session.calls[0]["url"].endswith("/api/show")
+
+
+def test_missing_context_info_is_not_an_error():
+    """На этом адресе может отвечать не Ollama — тогда проверить нечем."""
+    assert LLMClient(FAST, FakeSession(FakeResponse({}))).context_window() == (None, None)
+    assert LLMClient(
+        FAST, FakeSession(FakeResponse(None, 404, "nope"))
+    ).context_window() == (None, None)

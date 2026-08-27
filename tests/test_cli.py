@@ -284,6 +284,9 @@ def test_check_returns_nonzero_when_something_is_missing(monkeypatch, capsys):
         def available_models(self):
             return []
 
+        def context_window(self):
+            return None, None
+
     monkeypatch.setattr("minuteforge.cli.LLMClient", Client)
     assert main(["check"]) == 1
     assert "нет ffmpeg" in capsys.readouterr().out

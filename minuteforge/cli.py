@@ -262,6 +262,20 @@ def _run_checks(settings: Settings, ok: bool) -> int:
     if installed:
         print(f"  установлены: {', '.join(installed)}")
 
+    window, limit = client.context_window()
+    if window:
+        print(f"  окно модели {settings.llm_model}: {window} токенов")
+    if limit and limit < settings.chunk_budget:
+        print(
+            f"  НЕТ  сервер обрежет запрос до {limit} токенов, а фрагмент у нас "
+            f"{settings.chunk_budget}: конца фрагмента модель не увидит.\n"
+            f"       Либо поднимите num_ctx у модели, либо поставьте окно "
+            f"{limit} в настройках."
+        )
+        ok = False
+    elif limit:
+        print(f"  ок   предел сервера: {limit} токенов")
+
     return 0 if ok else 1
 
 

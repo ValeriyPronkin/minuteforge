@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -223,6 +224,44 @@ class LLMClient:
         return sorted(
             str(item.get("id")) for item in items if isinstance(item, dict) and item.get("id")
         )
+
+    def context_window(self) -> tuple[int | None, int | None]:
+        """Сколько текста модель примет на самом деле.
+
+        Возвращает (окно модели, предел сервера). Второе важнее: Ollama
+        держит собственный предел num_ctx, и по умолчанию он невелик. Всё,
+        что сверх него, сервер молча отрезает — модель просто не видит конца
+        фрагмента и половины поручений в нём.
+
+        Спрашивается это у родного интерфейса Ollama, а не у
+        OpenAI-совместимого: последний о таком не рассказывает. Не ответил —
+        значит там не Ollama, и проверить нечем.
+        """
+        root = self.base_url.rsplit("/v1", 1)[0]
+        try:
+            response = self._session.post(
+                f"{root}/api/show", json={"name": self.settings.llm_model}, timeout=10
+            )
+            if getattr(response, "status_code", 0) != 200:
+                return None, None
+            body = response.json()
+        except Exception as exc:
+            logger.info("Окно модели узнать не удалось: {}", exc)
+            return None, None
+
+        info = body.get("model_info") or {}
+        window = next(
+            (int(value) for key, value in info.items()
+             if key.endswith("context_length") and isinstance(value, (int, float))),
+            None,
+        )
+
+        limit = None
+        parameters = body.get("parameters") or ""
+        match = re.search(r"num_ctx\s+(\d+)", str(parameters))
+        if match:
+            limit = int(match.group(1))
+        return window, limit
 
     def health(self) -> bool:
         """Отвечает ли сервер и есть ли на нём заданная модель."""

@@ -658,6 +658,36 @@ def _merge_group(tasks: list[Task], indexes: list[int]) -> Task:
     )
 
 
+#: Насколько два поручения должны совпасть словами, чтобы считаться одним.
+#: Порог высокий намеренно. Поручения из одного совещания похожи между собой
+#: по построению: «приступить к строительству объекта КПО Нижневартовска» и
+#: «приступить к строительству объекта утилизации в Тюменской области»
+#: совпадают на три четверти, а это разные стройки в разных регионах.
+#: Различают их одно-два слова, и порог должен быть выше, чем цена этих слов.
+SAME_TASK = 0.85
+
+#: Короче этого поручения не сравниваются: на трёх словах любое совпадение
+#: случайно.
+MIN_WORDS_TO_COMPARE = 4
+
+
+def _looks_same(one: Task, other: Task) -> bool:
+    """Об одном ли эти два поручения.
+
+    Сравниваются значимые слова. Проверка тупая и потому предсказуемая: она
+    ловит пересказ теми же словами, а решать про разные слова — работа
+    модели, и она с ней, как выяснилось, не справляется.
+    """
+    left, right = _significant(one.what), _significant(other.what)
+    if min(len(left), len(right)) < MIN_WORDS_TO_COMPARE:
+        # На трёх словах совпадение ничего не значит: «работать с регионами»
+        # и «работать с региональными операторами» совпадут полностью, а это
+        # разные поручения.
+        return False
+    common = left & right
+    return len(common) / min(len(left), len(right)) >= SAME_TASK
+
+
 def dedupe(tasks: Iterable[Task]) -> list[Task]:
     """Убирает повторы.
 
@@ -669,22 +699,26 @@ def dedupe(tasks: Iterable[Task]) -> list[Task]:
     фрагменте модель увидела задачу без срока, а в другом — со сроком, срок
     сохраняется.
     """
-    best: dict[str, Task] = {}
-    order: list[str] = []
+    kept: list[Task] = []
     for task in tasks:
-        key = task.key
-        if key not in best:
-            best[key] = task
-            order.append(key)
-            continue
-        kept = best[key]
-        best[key] = Task(
-            what=kept.what,
-            who=kept.who or task.who,
-            due=kept.due or task.due,
-            chunk=kept.chunk,
+        twin = next(
+            (i for i, other in enumerate(kept)
+             if other.key == task.key or _looks_same(other, task)),
+            None,
         )
-    return [best[k] for k in order]
+        if twin is None:
+            kept.append(task)
+            continue
+        # Из двух записей об одном поручении берётся подробная, а
+        # исполнитель и срок — оттуда, где они есть.
+        old_task = kept[twin]
+        kept[twin] = Task(
+            what=max(old_task.what, task.what, key=len),
+            who=old_task.who or task.who,
+            due=old_task.due or task.due,
+            chunk=min(old_task.chunk, task.chunk) or old_task.chunk,
+        )
+    return kept
 
 
 def _parse_json(text: str, chunk: int) -> list[Task] | None:

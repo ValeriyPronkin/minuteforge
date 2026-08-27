@@ -482,3 +482,82 @@ def test_truncated_answer_keeps_what_fitted():
 
 def test_hopelessly_broken_answer_is_not_guessed():
     assert parse_tasks('{"tasks": [ {"wha') == []
+
+
+# ------------------------------------------- сведение повторов моделью
+
+def merged_client(answer: str):
+    class Client:
+        settings = None
+
+        def __init__(self):
+            self.prompts = []
+
+        def complete(self, system, user, **kwargs):
+            self.prompts.append((system, user))
+            return Reply(text=answer)
+
+    return Client()
+
+
+def test_paraphrases_of_one_task_are_merged():
+    """Фрагменты пересекаются, и одно поручение приезжает дважды разными
+    словами. Понять, что это одно и то же, может только модель."""
+    from minuteforge.tasks import merge_similar
+
+    tasks = [
+        Task("Подтвердить статус дорожной карты", "", "", chunk=2),
+        Task("Проинформировать о текущем статусе реализации дорожной карты", "Голованова", "", chunk=1),
+        Task("Направить письмо в министерство", "Ким С.А.", "сегодня", chunk=3),
+    ]
+    merged = merge_similar(tasks, merged_client('{"groups": [[1, 2], [3]]}'))
+
+    assert len(merged) == 2
+    assert merged[0].what == "Проинформировать о текущем статусе реализации дорожной карты"
+    assert merged[0].who == "Голованова", "исполнитель берётся оттуда, где он есть"
+
+
+def test_forgotten_task_survives():
+    """Молчание модели не должно стоить поручения: номер, не попавший ни в
+    одну группу, остаётся сам по себе."""
+    from minuteforge.tasks import merge_similar
+
+    tasks = [Task("Первое"), Task("Второе"), Task("Третье")]
+    merged = merge_similar(tasks, merged_client('{"groups": [[1]]}'))
+    assert len(merged) == 3
+
+
+def test_model_cannot_rewrite_or_invent_tasks():
+    """Модель возвращает номера, а сливает записи код — придумать своё или
+    переписать чужое она не может."""
+    from minuteforge.tasks import merge_similar
+
+    tasks = [Task("Направить письмо"), Task("Подготовить справку")]
+    merged = merge_similar(
+        tasks,
+        merged_client('{"groups": [[1, 2]], "tasks": [{"what": "Выдуманное поручение"}]}'),
+    )
+    assert [t.what for t in merged] == ["Подготовить справку"]
+
+
+def test_nonsense_grouping_is_ignored():
+    """Номера вне списка и повторы в разных группах не должны ни удваивать
+    поручения, ни терять их."""
+    from minuteforge.tasks import merge_similar
+
+    tasks = [Task("Первое"), Task("Второе")]
+    merged = merge_similar(tasks, merged_client('{"groups": [[1, 99], [1, 2]]}'))
+    assert len(merged) == 2
+
+
+def test_failed_merge_leaves_everything_as_it_was():
+    from minuteforge.tasks import merge_similar
+
+    class Broken:
+        settings = None
+
+        def complete(self, *a, **kw):
+            raise LLMError("сервер устал")
+
+    tasks = [Task("Первое"), Task("Второе")]
+    assert merge_similar(tasks, Broken()) == tasks

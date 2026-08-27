@@ -476,7 +476,10 @@ def extract_tasks(
             share=position / total,
         ))
 
-    return dedupe(collected)
+    merged = dedupe(collected)
+    if settings is not None and getattr(settings, "merge_similar", False) and merged:
+        merged = merge_similar(merged, client, json_mode=bool(json_mode))
+    return merged
 
 
 def _own_prompt(settings) -> str:
@@ -513,6 +516,110 @@ def _keep_sound(tasks: list[Task], source: str, corpus: str) -> list[Task]:
             chunk=task.chunk,
         ))
     return kept
+
+
+GROUPS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "groups": {"type": "array", "items": {"type": "array", "items": {"type": "integer"}}}
+    },
+    "required": ["groups"],
+    "additionalProperties": False,
+}
+
+MERGE_SYSTEM = """Ты — секретарь совещания. Тебе дан список поручений, выписанных по
+частям из одной стенограммы. Из-за деления на части одно и то же поручение могло
+попасть в список дважды, разными словами.
+
+Твоя задача — только сгруппировать повторы. Верни номера поручений, которые
+означают одно и то же:
+
+{"groups": [[1, 4], [2], [3, 5, 6]]}
+
+Правила:
+1. Каждый номер встречается ровно один раз.
+2. Поручение без пары — группа из одного номера.
+3. Не пиши текст поручений, только номера. Ничего не добавляй и не выбрасывай.
+4. Разные поручения одному человеку — это разные поручения, не объединяй их."""
+
+
+def merge_similar(
+    tasks: list[Task],
+    client: LLMClient,
+    *,
+    json_mode: bool = True,
+) -> list[Task]:
+    """Сводит поручения, сказанные разными словами.
+
+    Правила снимают только буквальные повторы, а фрагменты пересекаются, и
+    одно поручение приезжает дважды: «подтвердить статус дорожной карты» и
+    «проинформировать о текущем статусе дорожной карты». Понять, что это
+    одно и то же, может только модель.
+
+    Но решает она не всё: модель возвращает **номера**, а сливает записи код.
+    Так она физически не может ни переписать поручение по-своему, ни
+    выдумать новое, ни потерять то, о котором забыла, — не упомянутый номер
+    остаётся сам по себе.
+    """
+    if len(tasks) < 2:
+        return tasks
+
+    listing = "\n".join(f"{i}. {t.as_line()}" for i, t in enumerate(tasks, 1))
+    try:
+        reply = client.complete(
+            MERGE_SYSTEM, listing,
+            json_mode=json_mode,
+            schema=GROUPS_SCHEMA if json_mode else None,
+        )
+    except LLMError as exc:
+        logger.warning("Свести повторы не удалось, оставляю как есть: {}", exc)
+        return tasks
+
+    groups = _read_groups(reply.text, len(tasks))
+    merged = [_merge_group(tasks, indexes) for indexes in groups]
+    if len(merged) < len(tasks):
+        logger.info("Повторы сведены: {} -> {}", len(tasks), len(merged))
+    return merged
+
+
+def _read_groups(answer: str, count: int) -> list[list[int]]:
+    """Разбирает группы, добирая всё, о чём модель умолчала.
+
+    Номер, не попавший ни в одну группу, становится своей группой: молчание
+    модели не должно стоить поручения.
+    """
+    try:
+        body = json.loads(answer[answer.find("{") : answer.rfind("}") + 1])
+        raw = body.get("groups") or []
+    except (ValueError, AttributeError):
+        raw = []
+
+    groups: list[list[int]] = []
+    seen: set[int] = set()
+    for group in raw:
+        if not isinstance(group, list):
+            continue
+        clean = [int(n) - 1 for n in group if isinstance(n, int) and 1 <= n <= count]
+        clean = [n for n in clean if n not in seen]
+        if clean:
+            groups.append(clean)
+            seen.update(clean)
+
+    groups.extend([[n] for n in range(count) if n not in seen])
+    return sorted(groups, key=lambda g: g[0])
+
+
+def _merge_group(tasks: list[Task], indexes: list[int]) -> Task:
+    """Из нескольких записей об одном поручении — одна, самая полная."""
+    group = [tasks[i] for i in indexes]
+    # Берём самую подробную формулировку: короткая обычно теряет условие.
+    best = max(group, key=lambda t: len(t.what))
+    return Task(
+        what=best.what,
+        who=next((t.who for t in group if t.who), ""),
+        due=next((t.due for t in group if t.due), ""),
+        chunk=min(t.chunk for t in group),
+    )
 
 
 def dedupe(tasks: Iterable[Task]) -> list[Task]:

@@ -150,3 +150,25 @@ def test_empty_transcript_is_not_an_error():
     assert empty.duration_min == 0.0
     assert empty.speakers == []
     assert empty.as_text() == ""
+
+
+def test_speakers_are_ordered_by_how_much_they_talked():
+    """На длинной записи диаризация нарезает десятки меток, но говорят по
+    существу пятеро. Опознавать человек должен сперва их, а не того, чей
+    микрофон поймал два слова.
+    """
+    blocks = [
+        Block("SPEAKER_09", "Кхм.", 0, 2),
+        Block("SPEAKER_00", "Начинаем совещание, повестка такая.", 2, 62),
+        Block("SPEAKER_05", "Доложу по технике.", 62, 92),
+    ]
+    transcript = Transcript(blocks)
+
+    assert transcript.speakers_by_time() == ["SPEAKER_00", "SPEAKER_05", "SPEAKER_09"]
+    assert transcript.speaking_time()["SPEAKER_00"] == 60
+
+
+def test_speaking_time_survives_missing_timings():
+    transcript = Transcript([Block("Иванов", "Раз."), Block("Петров", "Два.", 0, 5)])
+    assert transcript.speaking_time()["Иванов"] == 0.0
+    assert transcript.speakers_by_time()[0] == "Петров"

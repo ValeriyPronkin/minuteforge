@@ -505,28 +505,66 @@ if people:
 OTHER = "другое…"
 options = ["", *[person.full for person in people], OTHER]
 
-labels = [s for s in transcript.speakers if s != UNKNOWN]
+# По убыванию времени речи: на двухчасовой записи диаризация нарезает
+# десятки меток, но по существу говорят пятеро. Опознавать нужно сперва их,
+# а не того, чей микрофон поймал два слова.
+ordered = [s for s in transcript.speakers_by_time() if s != UNKNOWN]
+spoken = transcript.speaking_time()
+total_spoken = sum(spoken.values()) or 1.0
+
+MAIN = 8
+main_labels, rest_labels = ordered[:MAIN], ordered[MAIN:]
+
+if rest_labels:
+    st.caption(
+        f"Голосов найдено {len(ordered)}. Первые {len(main_labels)} говорили "
+        "дольше всех — обычно это и есть участники. Остальные чаще всего "
+        "обрывки: эхо, кашель, реплика с чужого микрофона."
+    )
+    if len(ordered) > 12 and settings.speakers is None:
+        st.warning(
+            "Столько голосов на одном совещании — обычно признак того, что "
+            "диаризация раздробила участников. Укажите слева, сколько человек "
+            "говорит, и распознайте заново: точное число заметно помогает."
+        )
+
 names: dict[str, str] = {}
-columns = st.columns(min(3, max(1, len(labels))))
-for index, label in enumerate(labels):
+
+
+def name_field(label: str) -> None:
+    """Одно поле сопоставления: метка, её доля речи и первая реплика."""
+    seconds = spoken.get(label, 0.0)
+    sample = next((b.text for b in transcript.blocks if b.speaker == label), "")
+    # Догадка ставится по умолчанию, но остаётся догадкой: человек видит её
+    # рядом с первой репликой и либо соглашается, либо правит.
+    guess = guesses.get(label)
+    default = options.index(guess.full) if guess and guess.full in options else 0
+    title = f"{label} — {seconds / 60:.0f} мин ({seconds / total_spoken:.0%})"
+    choice = st.selectbox(title, options, index=default, key=f"pick_{label}")
+    if choice == OTHER:
+        choice = st.text_input(
+            "Кто это", key=f"name_{label}", placeholder="Фамилия И.О.",
+            label_visibility="collapsed",
+        )
+    if guess and default:
+        st.caption("Подсказка: назван перед этой репликой")
+    st.caption(f"«{sample[:70]}…»" if len(sample) > 70 else f"«{sample}»")
+    if choice and choice.strip():
+        # В протоколе под репликами нужна фамилия, а должность — в шапке.
+        names[label] = choice.split(",")[0].strip()
+
+
+columns = st.columns(min(3, max(1, len(main_labels))))
+for index, label in enumerate(main_labels):
     with columns[index % len(columns)]:
-        sample = next((b.text for b in transcript.blocks if b.speaker == label), "")
-        # Догадка ставится по умолчанию, но остаётся догадкой: человек видит
-        # её рядом с первой репликой и либо соглашается, либо правит.
-        guess = guesses.get(label)
-        default = options.index(guess.full) if guess and guess.full in options else 0
-        choice = st.selectbox(label, options, index=default, key=f"pick_{label}")
-        if choice == OTHER:
-            choice = st.text_input(
-                "Кто это", key=f"name_{label}", placeholder="Фамилия И.О.",
-                label_visibility="collapsed",
-            )
-        if guess and default:
-            st.caption("Подсказка: назван перед этой репликой")
-        st.caption(f"«{sample[:70]}…»" if len(sample) > 70 else f"«{sample}»")
-        if choice and choice.strip():
-            # В протоколе под репликами нужна фамилия, а должность — в шапке.
-            names[label] = choice.split(",")[0].strip()
+        name_field(label)
+
+if rest_labels:
+    with st.expander(f"Остальные голоса ({len(rest_labels)})"):
+        tail = st.columns(3)
+        for index, label in enumerate(rest_labels):
+            with tail[index % 3]:
+                name_field(label)
 
 # ---------------------------------------------------------------- шаг 3
 st.subheader("Шаг 3. Протокол")

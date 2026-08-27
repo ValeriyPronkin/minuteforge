@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import csv
+import re
 from dataclasses import dataclass, field
 from io import StringIO
 from typing import Sequence
@@ -75,21 +76,22 @@ class Protocol:
         for label, value in head:
             if value:
                 lines.append(f"**{label}:** {value}  ")
-        if self.attendees:
-            # С должностями — списком: строкой через запятую «Иванов И.И.,
-            # начальник отдела, Петров П.П., главный специалист» читается
-            # как перечень из четырёх человек.
-            full = self.attendees_full
-            if any(item != name for item, name in zip(full, self.attendees)):
-                lines.append("**Участники:**  ")
-                lines.append("")
-                lines.extend(f"* {item}" for item in full)
-                # Пустая строка после списка обязательна: без неё разметка
-                # приклеивает следующую строку к последнему участнику, и
-                # длительность записи оказывается его должностью.
-                lines.append("")
-            else:
-                lines.append(f"**Участники:** {', '.join(self.attendees)}  ")
+        if self.attendees_full:
+            # Списком, а не строкой через запятую: «Иванов И.И., начальник
+            # отдела, Петров П.П., главный специалист» читается как перечень
+            # из четырёх человек.
+            lines.append("**Участники:**  ")
+            lines.append("")
+            lines.extend(f"* {item}" for item in self.attendees_full)
+            # Пустая строка после списка обязательна: без неё разметка
+            # приклеивает следующую строку к последнему участнику, и
+            # длительность записи оказывается его должностью.
+            lines.append("")
+        if self.unnamed_count:
+            lines.append(
+                f"**Не опознано голосов:** {self.unnamed_count} — "
+                "их реплики есть в стенограмме  "
+            )
         if self.transcript is not None and self.transcript.duration_min:
             lines.append(f"**Длительность записи:** {self.transcript.duration_min} мин  ")
         lines.append("")
@@ -131,7 +133,7 @@ class Protocol:
             "chair": self.chair,
             "secretary": self.secretary,
             "attendees": "\n".join(f"{i}. {a}" for i, a in enumerate(self.attendees_full, 1)),
-            "attendees_line": ", ".join(self.attendees),
+            "attendees_line": ", ".join(self.named_attendees),
             "duration": f"{self.transcript.duration_min} мин" if self.transcript else "",
             "tasks": "\n".join(_task_lines(self.actionable)),
             "unclear": "\n".join(f"- {t.what}" for t in self.needs_clarification),
@@ -140,10 +142,30 @@ class Protocol:
         }
 
     @property
+    def named_attendees(self) -> list[str]:
+        """Только те, кого опознали.
+
+        Метка вида ``SPEAKER_13`` — не участник совещания, а обозначение
+        голоса. В шапке протокола такому места нет: документ подписывают и
+        рассылают, а список из двадцати девяти безымянных голосов делает его
+        бумагой, которую нельзя показать.
+        """
+        return [name for name in self.attendees if not _is_label(name)]
+
+    @property
+    def unnamed_count(self) -> int:
+        """Сколько голосов осталось неопознанными.
+
+        Молча их не прячем: строка «столько-то голосов не опознано» честно
+        говорит, что список неполон.
+        """
+        return sum(1 for name in self.attendees if _is_label(name))
+
+    @property
     def attendees_full(self) -> list[str]:
-        """Участники с должностями, если они известны."""
+        """Опознанные участники с должностями, если они известны."""
         result = []
-        for name in self.attendees:
+        for name in self.named_attendees:
             person = find(self.people, name)
             result.append(person.full if person else name)
         return result
@@ -218,6 +240,11 @@ def build_protocol(
         transcript=transcript,
         answers=list(answers or []),
     )
+
+
+def _is_label(name: str) -> bool:
+    """Похоже ли это на метку диаризации, а не на человека."""
+    return bool(re.match(r"^(SPEAKER[_ -]*\d+|UNKNOWN)$", (name or "").strip(), re.IGNORECASE))
 
 
 def _task_lines(tasks: Sequence[Task]) -> list[str]:

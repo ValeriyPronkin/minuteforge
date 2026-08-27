@@ -160,6 +160,29 @@ class Transcript:
     def speakers(self) -> list[str]:
         return speakers(self.blocks)
 
+    def speaking_time(self) -> dict[str, float]:
+        """Сколько секунд говорил каждый.
+
+        По этому числу отделяют участников от обрывков: на длинной записи
+        диаризация нарезает десятки меток, но говорят по существу пятеро, а
+        у остальных набирается по несколько секунд — чужое эхо, кашель,
+        реплика с чужого микрофона.
+        """
+        totals: dict[str, float] = {}
+        for block in self.blocks:
+            totals[block.speaker] = totals.get(block.speaker, 0.0) + (block.duration or 0.0)
+        return totals
+
+    def speakers_by_time(self) -> list[str]:
+        """Метки от самого говорливого к самому молчаливому.
+
+        Именно в этом порядке их и стоит показывать человеку: он опознаёт
+        тех, кто вёл совещание и докладывал, а не того, чей микрофон
+        случайно поймал два слова.
+        """
+        totals = self.speaking_time()
+        return sorted(self.speakers, key=lambda label: totals.get(label, 0.0), reverse=True)
+
     def as_text(self, *, with_time: bool = False) -> str:
         """Стенограмма как текст: строка на реплику."""
         lines = []

@@ -138,15 +138,30 @@ def test_line_after_the_attendee_list_is_not_glued_to_it():
     assert "Длительность записи" in "\n".join(lines[last_attendee:])
 
 
-def test_mixed_named_and_unnamed_attendees_are_all_shown():
-    """Часть меток осталась без имени — это нормально, но потерять их нельзя."""
+def test_unnamed_labels_are_counted_not_listed():
+    """Метка SPEAKER_13 — не участник, а обозначение голоса.
+
+    На двухчасовом совещании диаризация нарезает их десятками, и список из
+    двадцати девяти безымянных голосов превращает протокол в бумагу,
+    которую нельзя показать. Но и молчать о них нельзя: список неполон.
+    """
     from minuteforge.people import Person
 
     protocol = Protocol(
-        attendees=["SPEAKER_02", "Семенов А.В.", "SPEAKER_01"],
+        attendees=["SPEAKER_02", "Семенов А.В.", "SPEAKER_01", "UNKNOWN"],
         people=[Person("Семенов А.В.", "первый замминистр")],
     )
     text = protocol.as_markdown()
-    assert "* SPEAKER_02" in text
+
     assert "* Семенов А.В., первый замминистр" in text
-    assert "* SPEAKER_01" in text
+    assert "SPEAKER_02" not in text
+    assert "**Не опознано голосов:** 3" in text
+
+
+def test_protocol_without_a_single_named_participant():
+    """Никого не опознали — списка участников нет вовсе, а не пустой
+    заголовок с двоеточием."""
+    protocol = Protocol(attendees=["SPEAKER_00", "SPEAKER_01"])
+    text = protocol.as_markdown()
+    assert "**Участники:**" not in text
+    assert "**Не опознано голосов:** 2" in text

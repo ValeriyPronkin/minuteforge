@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
@@ -163,7 +164,13 @@ class Task:
         return "; ".join(parts)
 
 
-def build_prompt(chunk: Chunk, *, json_mode: bool = False) -> tuple[str, str]:
+def build_prompt(
+    chunk: Chunk,
+    *,
+    json_mode: bool = False,
+    extra: str = "",
+    base: str = "",
+) -> tuple[str, str]:
     """Собирает пару «системный промпт, текст запроса» для куска.
 
     Модели сообщается, что она видит часть совещания, а не всё: иначе она
@@ -179,7 +186,12 @@ def build_prompt(chunk: Chunk, *, json_mode: bool = False) -> tuple[str, str]:
         if named:
             header += f"Участники фрагмента: {', '.join(named)}."
         header += "\n\n"
-    system = EXTRACT_SYSTEM_JSON if json_mode else EXTRACT_SYSTEM
+    system = base or (EXTRACT_SYSTEM_JSON if json_mode else EXTRACT_SYSTEM)
+    if extra.strip():
+        # В конец: последнее указание модель держит лучше всего. И отдельным
+        # разделом, чтобы человек, дописавший своё, видел, где оно кончается
+        # и начинается наше.
+        system = f"{system}\n\nДополнительно:\n{extra.strip()}"
     return system, f"{header}Стенограмма:\n{chunk.text}"
 
 
@@ -391,7 +403,13 @@ def extract_tasks(
         report(progress, Step(name="chunk", title=title, share=(position - 1) / total))
 
         started = time.perf_counter()
-        system, user = build_prompt(chunk, json_mode=bool(json_mode))
+        settings = getattr(client, "settings", None)
+        system, user = build_prompt(
+            chunk,
+            json_mode=bool(json_mode),
+            extra=getattr(settings, "prompt_extra", "") or "",
+            base=_own_prompt(settings),
+        )
         try:
             reply = client.complete(
                 system, user,
@@ -452,6 +470,18 @@ def extract_tasks(
         ))
 
     return dedupe(collected)
+
+
+def _own_prompt(settings) -> str:
+    """Своё системное указание из файла, если оно задано."""
+    path = getattr(settings, "prompt_file", None)
+    if not path:
+        return ""
+    try:
+        return Path(path).read_text(encoding="utf-8-sig")
+    except OSError as exc:
+        logger.warning("Не прочитать {}, беру встроенное указание: {}", path, exc)
+        return ""
 
 
 def _keep_sound(tasks: list[Task], source: str, corpus: str) -> list[Task]:

@@ -419,3 +419,45 @@ def test_greeting_is_not_an_assignee():
     assert clean_assignee("Уважаемые коллеги", corpus) == ""
     assert clean_assignee("Мы", corpus) == ""
     assert clean_assignee("Ким С.А.", corpus) == "Ким С.А."
+
+
+# ------------------------------------------- свои указания модели
+
+def test_extra_instructions_are_appended_not_replacing():
+    """Правила формата менять нельзя: сломается разбор, а человек не поймёт
+    почему. Своё дописывается в конец, отдельным разделом."""
+    system, _ = build_prompt(
+        Chunk([Block("И", "раз")], index=1, total=1),
+        json_mode=True,
+        extra="Поручения у нас называются заданиями.",
+    )
+    assert "Дополнительно:\nПоручения у нас называются заданиями." in system
+    assert '{"tasks": []}' in system, "правила формата остались на месте"
+    assert system.index("Дополнительно:") > system.index("Ответь строго")
+
+
+def test_empty_extra_changes_nothing():
+    plain, _ = build_prompt(Chunk([Block("И", "раз")], index=1, total=1), json_mode=True)
+    spaced, _ = build_prompt(
+        Chunk([Block("И", "раз")], index=1, total=1), json_mode=True, extra="   "
+    )
+    assert plain == spaced
+
+
+def test_own_prompt_replaces_the_built_in_one():
+    """Для тех, кто понимает, что делает: правила формата придётся написать
+    самому."""
+    system, _ = build_prompt(
+        Chunk([Block("И", "раз")], index=1, total=1), base="Своё указание целиком."
+    )
+    assert system == "Своё указание целиком."
+
+
+def test_unreadable_prompt_file_falls_back_to_the_built_in():
+    """Опечатка в пути не должна ронять расчёт — берём встроенное."""
+    from minuteforge.tasks import _own_prompt
+
+    class Settings:
+        prompt_file = "/такого/файла/нет.txt"
+
+    assert _own_prompt(Settings()) == ""

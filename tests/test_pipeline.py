@@ -540,3 +540,23 @@ def test_clearing_the_cache_does_not_touch_the_results(tmp_path):
 
     clear_cache(work)
     assert (out / "протокол.md").exists()
+
+
+def test_only_this_recording_is_cleaned(tmp_path):
+    """Чужие разборы ни при чём: у каждой записи своя папка."""
+    from minuteforge.pipeline import cache_dir_for, clear_cache
+
+    work = tmp_path / "work"
+    work.mkdir()
+    mine = tmp_path / "моё.mp4"
+    mine.write_bytes(b"video")
+    theirs = cache_dir_for(tmp_path / "чужое.mp4", work) if False else work / "чужое-00000000"
+    theirs.mkdir()
+    (theirs / "meeting.wav").write_bytes(b"x" * 100)
+
+    cache = cache_dir_for(mine, work)
+    cache.mkdir(parents=True)
+    (cache / "meeting.wav").write_bytes(b"x" * 200)
+
+    assert clear_cache(cache) == 200
+    assert (theirs / "meeting.wav").exists()

@@ -111,6 +111,9 @@ class Settings:
     #: Промежуточное: извлечённый звук и результаты шагов. Здесь и копятся
     #: гигабайты — двухчасовая запись даёт около 230 МБ одного только wav.
     work_dir: Path = field(default_factory=lambda: Path("data/work"))
+    #: Оставлять ли промежуточное после готового протокола. По умолчанию нет:
+    #: гигабайты копятся незаметно, а нужны они редко.
+    keep_work_files: bool = False
     log_dir: Path = field(default_factory=lambda: Path("logs"))
     log_level: str = "INFO"
 

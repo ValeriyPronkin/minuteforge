@@ -47,3 +47,10 @@ def test_environment_overrides_defaults(monkeypatch):
     settings = Settings.load("нет-такого-файла.yaml")
     assert settings.asr_model == "large-v3"
     assert settings.llm_context_tokens == 32768
+
+
+def test_work_files_are_cleaned_by_default():
+    """Гигабайты копятся незаметно, а нужны редко: место экономится само,
+    а кому нужно — тот включит хранение."""
+    assert Settings().keep_work_files is False
+    assert Settings.load("config.yaml").keep_work_files is False

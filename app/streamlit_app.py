@@ -39,6 +39,7 @@ from minuteforge.people import (  # noqa: E402
 )
 from minuteforge.pipeline import (  # noqa: E402
     Meeting,
+    cache_dir_for,
     cache_size,
     check_writable,
     clear_cache,
@@ -590,6 +591,12 @@ if source_path is not None or uploaded is not None:
             source = WORK_DIR / uploaded.name
             with st.spinner("Сохраняю загруженный файл…"):
                 source.write_bytes(uploaded.getbuffer())
+            # Копия видео — самое тяжёлое в рабочей папке. Помним, что она
+            # наша, чтобы убрать вместе с остальным промежуточным.
+            st.session_state["uploaded_copy"] = source
+        st.session_state["cache_dir"] = cache_dir_for(
+            source, WORK_DIR, start=from_time or None, end=to_time or None
+        )
         live = Live("Готовлюсь…")
         try:
             transcript = transcribe_meeting(
@@ -793,6 +800,21 @@ if st.button("Собрать протокол", type="primary"):
         written = {"protocol": document, "tasks": tasks}
     st.session_state["saved_protocol"] = written
     st.session_state["protocol"] = protocol
+
+    # Промежуточное убирается здесь, а не сразу после распознавания: до
+    # готового протокола кеш ещё может пригодиться, если голоса захотят
+    # переразметить. Чистится только эта запись — чужие разборы ни при чём.
+    if not BASE.keep_work_files:
+        freed = 0
+        cache = st.session_state.get("cache_dir")
+        if cache:
+            freed += clear_cache(cache)
+        copy = st.session_state.get("uploaded_copy")
+        if copy and Path(copy).exists():
+            freed += Path(copy).stat().st_size
+            Path(copy).unlink(missing_ok=True)
+        if freed:
+            st.session_state["freed"] = freed
     st.session_state["template"] = (
         template_file.getvalue().decode("utf-8-sig") if template_file is not None else None
     )
@@ -830,6 +852,12 @@ if protocol is not None:
         folder = Path(next(iter(written.values()))).parent
         st.success(f"Протокол сохранён в `{folder}`")
         st.markdown("\n".join(f"- `{Path(path).name}`" for path in written.values()))
+        freed = st.session_state.get("freed")
+        if freed:
+            st.caption(
+                f"Промежуточное убрано, освободилось {freed / 1024 ** 2:.0f} МБ. "
+                "Чтобы оставлять — keep_work_files: true в config.yaml."
+            )
 
     template = st.session_state.get("template")
     document = protocol.render(template) if template else protocol.as_markdown()

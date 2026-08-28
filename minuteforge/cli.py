@@ -25,7 +25,7 @@ from pathlib import Path
 from loguru import logger
 
 from .blocks import Transcript, blocks_from_segments, consolidate
-from .config import Settings
+from .config import HF_TOKEN_ENV, Settings
 from .llm import LLMClient
 from .audio import AudioError, ffmpeg_available
 from .people import merge_suggestions, mentioned_people, read_people
@@ -246,7 +246,20 @@ def _run_checks(settings: Settings, ok: bool) -> int:
         print(f"  {'ок  ' if good else 'НЕТ '} {note}")
         ok = ok and good
 
-    for model, why in check_model_access(settings.hf_token, models=GATED_MODELS).items():
+    # Отдельной строкой: «нет токена» и «токен не принят» лечатся по-разному,
+    # а в списке моделей выглядят одинаково.
+    token = settings.hf_token
+    if token:
+        print(f"  ок   {HF_TOKEN_ENV} виден: {token[:4]}…{token[-2:]}, длина {len(token)}")
+    else:
+        print(f"  НЕТ  {HF_TOKEN_ENV} не виден этому процессу")
+        print("       Проверить: echo %HF_TOKEN% (cmd), $env:HF_TOKEN (PowerShell).")
+        print('       Задать: setx HF_TOKEN "hf_..." — и открыть НОВОЕ окно')
+        print("       терминала: в текущем переменной не появится.")
+        print("       Токен нужен только разметке голосов. Без неё стенограмма")
+        print("       будет без имён, а поручения извлекутся: --no-diarize.")
+
+    for model, why in check_model_access(token, models=GATED_MODELS).items():
         name = model.split("/")[-1]
         print(f"  {'ок  ' if not why else 'НЕТ '} {name}{'' if not why else ': ' + why}")
         ok = ok and not why

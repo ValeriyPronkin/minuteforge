@@ -513,33 +513,76 @@ def _own_prompt(settings) -> str:
 
 
 def attach_source(tasks: list[Task], chunk: Chunk) -> list[Task]:
-    """Привязывает поручение к реплике, из которой оно выписано.
+    """Привязывает поручение к тому месту, откуда оно выписано.
 
-    Ищется реплика с наибольшим совпадением по значимым словам. Способ
-    грубый, но проверять его дёшево: человек видит цитату рядом с
-    поручением и сразу понимает, то ли это место.
+    Ищется не реплика, а предложение внутри неё. Разница решающая: после
+    разметки по голосам реплика — это целое выступление на десять минут, и
+    её начало не говорит ничего. Восемь поручений из одной речи получали
+    одну и ту же отметку времени, перематывать по которой некуда.
 
-    Без привязки проверка выглядит так: восемьдесят пунктов и двухчасовая
-    запись, ищите сами. С привязкой — взгляд на цитату и, если сомнительно,
-    переход к отметке времени.
+    Отметка внутри выступления считается по доле текста: точной её сделать
+    нельзя — время известно только для реплики целиком, — но попадает она в
+    нужную минуту, а не в начало доклада.
     """
     attached = []
     for task in tasks:
         words = _significant(task.what)
-        best, score = None, 0.0
-        for block in chunk.blocks:
-            if not words:
-                break
-            overlap = len(words & _significant(block.text)) / len(words)
-            if overlap > score:
-                best, score = block, overlap
+        found = _best_sentence(words, chunk) if words else None
         attached.append(Task(
             what=task.what, who=task.who, due=task.due, chunk=task.chunk,
-            at=best.start if best is not None else None,
-            quote=_short_quote(best.text) if best is not None else "",
-            said_by=best.speaker if best is not None else "",
+            at=found[0] if found else None,
+            quote=found[1] if found else "",
+            said_by=found[2] if found else "",
         ))
     return attached
+
+
+def _best_sentence(words: set[str], chunk: Chunk) -> tuple[float, str, str] | None:
+    """Предложение, больше всего похожее на поручение.
+
+    Совпадение считается долей от слов поручения, а не от слов предложения:
+    иначе выигрывает самое длинное, в котором просто больше слов. При равном
+    счёте берётся короткое — цитата в одну строку полезнее абзаца.
+    """
+    best = None
+    best_score = 0.0
+    for block in chunk.blocks:
+        offset = 0
+        for sentence in _sentences(block.text):
+            share = len(words & _significant(sentence)) / len(words)
+            # Короткое при равном счёте: длинное предложение попадает в счёт
+            # случайными совпадениями, и цитата из него нечитаема.
+            better = share > best_score or (
+                share == best_score and best is not None and len(sentence) < len(best[1])
+            )
+            if share > 0 and better:
+                best_score = share
+                best = (_moment(block, offset), _short_quote(sentence), block.speaker)
+            offset += len(sentence)
+    return best
+
+
+def _sentences(text: str) -> list[str]:
+    """Режет реплику на предложения. Грубо — точки хватает."""
+    parts = re.split(r"(?<=[.!?])\s+", (text or "").strip())
+    return [part for part in parts if part]
+
+
+def _moment(block, offset: int) -> float | None:
+    """Где внутри реплики находится это место, по доле текста.
+
+    Приблизительно, и точнее не получится: время известно только для реплики
+    целиком. Но попасть в нужную минуту десятиминутного выступления это
+    позволяет, а начало доклада — нет.
+    """
+    # Время у реплики может отсутствовать: стенограмму приносят и руками.
+    start, end = block.start, block.end
+    if start is None:
+        return None
+    length = len(block.text or "")
+    if not length or end is None or end <= start:
+        return start
+    return start + (end - start) * (offset / length)
 
 
 def _short_quote(text: str, limit: int = 220) -> str:

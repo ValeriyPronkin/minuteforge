@@ -662,3 +662,44 @@ def test_unmatched_task_is_left_without_a_place_rather_than_a_wrong_one():
     chunk = Chunk([Block("И", "Совсем о другом.", 10, 20)], index=1, total=1)
     task = attach_source([Task("Подготовить справку по инцидентам")], chunk)[0]
     assert task.at is None or task.quote == "Совсем о другом."
+
+
+def test_quote_is_the_sentence_not_the_start_of_the_speech():
+    """После разметки по голосам реплика — это выступление на десять минут.
+    Восемь поручений из одной речи получали одну отметку времени, и
+    перематывать по ней было некуда."""
+    from minuteforge.tasks import attach_source
+
+    speech = (
+        "Спасибо, уважаемые коллеги. "
+        "Задачи перед отраслью объёмные. "
+        "Мы произведём очень плотный аудит всех процессов. "
+        "Также нужно плотно работать с региональными операторами."
+    )
+    chunk = Chunk([Block("SPEAKER_01", speech, 3600, 3900)], index=1, total=1)
+
+    audit, regions = attach_source(
+        [Task("Произвести очень плотный аудит"),
+         Task("Плотно работать с региональными операторами")],
+        chunk,
+    )
+
+    assert "аудит всех процессов" in audit.quote
+    assert "региональными операторами" in regions.quote
+    assert audit.at != regions.at
+    assert audit.at > 3600
+
+
+def test_long_sentence_does_not_win_by_sheer_length():
+    """Совпадение считается от слов поручения: иначе выигрывает самое
+    длинное предложение, в котором просто больше слов."""
+    from minuteforge.tasks import attach_source
+
+    text = (
+        "Выслать протокол. "
+        "Затем мы обсудим протокол, регламент, сроки, участников, площадку, "
+        "повестку, решения, выслать материалы и многое другое по списку."
+    )
+    chunk = Chunk([Block("И", text, 0, 100)], index=1, total=1)
+    task = attach_source([Task("Выслать протокол")], chunk)[0]
+    assert task.quote == "Выслать протокол."

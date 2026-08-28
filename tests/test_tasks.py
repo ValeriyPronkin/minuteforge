@@ -703,3 +703,53 @@ def test_long_sentence_does_not_win_by_sheer_length():
     chunk = Chunk([Block("И", text, 0, 100)], index=1, total=1)
     task = attach_source([Task("Выслать протокол")], chunk)[0]
     assert task.quote == "Выслать протокол."
+
+
+def test_assignee_named_far_away_is_not_kept():
+    """Раньше фамилия принималась, если встречалась где угодно в стенограмме.
+    На двухчасовом совещании чаще всех звучит имя ведущего, и он оказывался
+    адресатом там, где сам же и говорил. Неверный адресат хуже пустого."""
+    from minuteforge.tasks import attach_source
+
+    chunk = Chunk([
+        Block("Голованова А.Н.", "Передача возможна после согласования.", 100, 160),
+    ], index=1, total=1)
+
+    task = attach_source(
+        [Task("Прокомментировать передачу", "Огородникова Наталья Юрьевна")], chunk
+    )[0]
+    assert task.who == ""
+
+
+def test_assignee_named_in_the_next_reply_is_kept():
+    """Адресата часто называют рядом: «Сергей Анатольевич, подготовьте» — и
+    следом он сам отвечает, а поручение цепляется к его словам."""
+    from minuteforge.tasks import attach_source
+
+    chunk = Chunk([
+        Block("Орлов В.П.", "Сергей Анатольевич, подготовьте план работ.", 0, 30),
+        Block("Ким С.А.", "Хорошо, план работ подготовлю к пятнице.", 30, 60),
+    ], index=1, total=1)
+
+    task = attach_source([Task("Подготовить план работ", "Сергей Анатольевич")], chunk)[0]
+    assert task.who == "Сергей Анатольевич"
+
+
+def test_speaker_taking_it_on_himself_stays_the_assignee():
+    """«Сейчас уточним информацию, я вам доложу» — поручение, и исполнитель
+    известен: тот, кто это сказал."""
+    from minuteforge.tasks import attach_source
+
+    chunk = Chunk([
+        Block("Семенов А.В.", "По оборудованию сейчас уточним информацию и доложу.", 0, 40),
+    ], index=1, total=1)
+
+    task = attach_source([Task("Уточнить информацию", "Семенов А.В.")], chunk)[0]
+    assert task.who == "Семенов А.В."
+
+
+def test_declension_does_not_break_the_match():
+    from minuteforge.tasks import _named_in
+
+    assert _named_in("просьба к Огородниковой подготовить", "Огородникова Наталья")
+    assert not _named_in("просьба подготовить справку", "Огородникова Наталья")

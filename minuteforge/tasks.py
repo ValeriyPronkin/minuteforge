@@ -528,8 +528,11 @@ def attach_source(tasks: list[Task], chunk: Chunk) -> list[Task]:
     for task in tasks:
         words = _significant(task.what)
         found = _best_sentence(words, chunk) if words else None
+        block = found[3] if found else None
         attached.append(Task(
-            what=task.what, who=task.who, due=task.due, chunk=task.chunk,
+            what=task.what,
+            who=task.who if _who_holds(task.who, block, chunk) else "",
+            due=task.due, chunk=task.chunk,
             at=found[0] if found else None,
             quote=found[1] if found else "",
             said_by=found[2] if found else "",
@@ -537,7 +540,61 @@ def attach_source(tasks: list[Task], chunk: Chunk) -> list[Task]:
     return attached
 
 
-def _best_sentence(words: set[str], chunk: Chunk) -> tuple[float, str, str] | None:
+#: Сколько реплик вокруг считается тем же местом разговора. Адресата часто
+#: называют в соседней: «Сергей Анатольевич, подготовьте» — и следом сам
+#: Сергей Анатольевич отвечает, а поручение прицепляется к его словам.
+NEARBY = 1
+
+
+def _who_holds(who: str, block, chunk: Chunk) -> bool:
+    """Назван ли исполнитель там же, где прозвучало поручение.
+
+    Раньше фамилия принималась, если встречалась где угодно в стенограмме.
+    Для двухчасового совещания это почти не проверка: чаще всех звучит имя
+    ведущего, и он оказывался адресатом там, где сам же и говорил.
+
+    Годятся два случая. Либо человека назвали в этой самой реплике — «Сергей
+    Анатольевич, прошу подготовить». Либо он и есть говорящий: взялся
+    сделать сам, и это тоже поручение.
+
+    Неверный адресат хуже пустого. Пустой заставляет уточнить перед
+    рассылкой, неверный уходит в рассылку как есть.
+    """
+    if not who:
+        return False
+    if block is None:
+        return True
+    for near in _around(block, chunk):
+        if _named_in(near.text or "", who) or _named_in(near.speaker or "", who):
+            return True
+    return False
+
+
+def _around(block, chunk: Chunk) -> list:
+    """Реплика и её соседи — то, что считается одним местом разговора."""
+    try:
+        at = chunk.blocks.index(block)
+    except ValueError:  # pragma: no cover — блок всегда из этого куска
+        return [block]
+    return chunk.blocks[max(0, at - NEARBY):at + NEARBY + 1]
+
+
+def _named_in(text: str, who: str) -> bool:
+    """Встречается ли имя в тексте, с поправкой на падежи.
+
+    Сравниваются основы: «Огородникова» и «Огородниковой» — один человек, а
+    точное совпадение их не признаёт.
+    """
+    lowered = text.lower()
+    for word in re.findall(r"\w+", who.lower()):
+        if len(word) < 4:
+            continue
+        if (word[:-2] if len(word) > 5 else word) in lowered:
+            return True
+    return False
+
+
+def _best_sentence(words: set[str], chunk: Chunk) -> tuple | None:
     """Предложение, больше всего похожее на поручение.
 
     Совпадение считается долей от слов поручения, а не от слов предложения:
@@ -557,7 +614,7 @@ def _best_sentence(words: set[str], chunk: Chunk) -> tuple[float, str, str] | No
             )
             if share > 0 and better:
                 best_score = share
-                best = (_moment(block, offset), _short_quote(sentence), block.speaker)
+                best = (_moment(block, offset), _short_quote(sentence), block.speaker, block)
             offset += len(sentence)
     return best
 

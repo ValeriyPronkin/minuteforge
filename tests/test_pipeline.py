@@ -504,7 +504,7 @@ def test_unwritable_folder_is_reported_before_the_run(tmp_path):
     busy.write_text("это файл, а не папка", encoding="utf-8")
     trouble = check_writable(busy)
     assert "не получается" in trouble
-    assert "сетевой диск" in trouble
+    assert "сетевой диск" in trouble, "подсказка нужна: чаще всего папка сетевая"
 
 
 def test_writability_check_leaves_nothing_behind(tmp_path):

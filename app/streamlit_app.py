@@ -39,6 +39,7 @@ from minuteforge.people import (  # noqa: E402
 )
 from minuteforge.pipeline import (  # noqa: E402
     Meeting,
+    check_writable,
     protocol_from_transcript,
     _free_name,
     run_dir,
@@ -227,6 +228,12 @@ with st.sidebar:
         "подразделение.",
     ).strip() or OUTPUT_DIR).expanduser().resolve()
     st.caption(f"Файлы появятся здесь: `{out_dir}`")
+    # Проверяется сразу, а не при сохранении: папка часто сетевая, а узнавать
+    # о недоступном диске после сорока минут распознавания — терять сорок
+    # минут.
+    trouble = check_writable(out_dir)
+    if trouble:
+        st.error(trouble)
 
     st.header("Документ")
     roster_file = st.file_uploader(

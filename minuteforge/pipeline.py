@@ -265,6 +265,29 @@ def process(
     )
 
 
+def check_writable(out_dir: str | Path) -> str:
+    """Можно ли туда писать. Пустая строка — можно.
+
+    Спрашивается до расчёта, а не после. Папка для результатов часто сетевая,
+    а сетевой диск отваливается: буква не подключена в этом сеансе, сервер
+    недоступен, прав на запись нет. Узнавать об этом после сорока минут
+    распознавания — терять сорок минут.
+    """
+    folder = Path(out_dir).expanduser()
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        probe = folder / ".minuteforge-проверка"
+        probe.write_text("проверка", encoding="utf-8")
+        probe.unlink()
+    except OSError as exc:
+        return (
+            f"Писать в «{folder}» не получается: {exc.strerror or exc}.\n"
+            "Если это сетевой диск — подключён ли он в этом сеансе и есть ли "
+            "права на запись? Путь вида \\\\сервер\\папка надёжнее буквы диска."
+        )
+    return ""
+
+
 def warm_up(client, progress=None) -> None:
     """Заставляет сервер загрузить модель до начала разбора.
 

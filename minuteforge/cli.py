@@ -31,6 +31,7 @@ from .audio import AudioError, ffmpeg_available
 from .people import merge_suggestions, mentioned_people, read_people
 from .pipeline import (
     Meeting,
+    check_writable,
     protocol_from_transcript,
     save,
     save_transcript,
@@ -263,6 +264,13 @@ def _run_checks(settings: Settings, ok: bool) -> int:
         name = model.split("/")[-1]
         print(f"  {'ок  ' if not why else 'НЕТ '} {name}{'' if not why else ': ' + why}")
         ok = ok and not why
+
+    where = settings.output_dir
+    cannot = check_writable(where)
+    print(f"  {'ок  ' if not cannot else 'НЕТ '} запись в {where}")
+    if cannot:
+        print(f"       {cannot.splitlines()[0]}")
+        ok = False
 
     client = LLMClient(settings)
     trouble = client.diagnose()

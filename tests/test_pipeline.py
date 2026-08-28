@@ -491,3 +491,24 @@ def test_failed_warm_up_does_not_stop_the_run():
             raise LLMUnavailable("сервер молчит")
 
     warm_up(Dead())
+
+
+def test_unwritable_folder_is_reported_before_the_run(tmp_path):
+    """Папка для результатов часто сетевая, а сетевой диск отваливается.
+    Узнавать об этом после сорока минут распознавания — терять сорок минут."""
+    from minuteforge.pipeline import check_writable
+
+    assert check_writable(tmp_path / "новая") == ""
+
+    busy = tmp_path / "занято"
+    busy.write_text("это файл, а не папка", encoding="utf-8")
+    trouble = check_writable(busy)
+    assert "не получается" in trouble
+    assert "сетевой диск" in trouble
+
+
+def test_writability_check_leaves_nothing_behind(tmp_path):
+    from minuteforge.pipeline import check_writable
+
+    check_writable(tmp_path)
+    assert list(tmp_path.iterdir()) == []

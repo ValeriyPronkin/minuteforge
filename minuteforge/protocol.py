@@ -17,7 +17,7 @@ from io import StringIO
 from typing import Sequence
 
 from .blocks import UNKNOWN, Transcript
-from .people import Person, find
+from .people import Person, canonical, find
 from .tasks import Task
 
 
@@ -230,6 +230,18 @@ def build_protocol(
     выдуманного: приписать совещанию участника, которого не было, хуже, чем
     оставить строку незаполненной.
     """
+    if people:
+        # Имена исполнителей приводятся к списку участников: в записи
+        # порядок слов свободный, отчество распознаётся плохо, а в протоколе
+        # один и тот же человек не должен встречаться в двух написаниях.
+        tasks = [
+            Task(
+                what=task.what, who=canonical(task.who, people), due=task.due,
+                chunk=task.chunk, at=task.at, quote=task.quote, said_by=task.said_by,
+            )
+            for task in tasks
+        ]
+
     if attendees is None and transcript is not None:
         # Неопознанные реплики в стенограмме остаются, но участником
         # совещания UNKNOWN не является: в шапке протокола это выглядело бы

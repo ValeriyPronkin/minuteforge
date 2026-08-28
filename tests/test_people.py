@@ -1,8 +1,10 @@
 import io
+from pathlib import Path
 
 from minuteforge.blocks import Block
 from minuteforge.people import (
     Person,
+    canonical,
     find,
     merge_suggestions,
     mentioned_people,
@@ -142,3 +144,43 @@ def test_person_absent_from_the_roster_is_added():
 def test_merging_without_a_roster_keeps_what_was_heard():
     heard = [Person("Семенов Алексей Валерьевич")]
     assert merge_suggestions([], heard) == heard
+
+
+def test_name_is_brought_to_the_form_from_the_roster():
+    """В записи порядок слов свободный, отчество распознаётся плохо, а в
+    протоколе один человек не должен встречаться в двух написаниях."""
+    roster = [
+        Person("Белянина Ольга Евгеньевна", "министр экологии"),
+        Person("Огородникова Наталья Юрьевна"),
+        Person("Семёнов Алексей Валерьевич"),
+    ]
+
+    assert canonical("Наталья Юрьевна Огородникова", roster) == "Огородникова Наталья Юрьевна"
+    assert canonical("Ольга Евгенина Белянина", roster) == "Белянина Ольга Евгеньевна"
+    assert canonical("Огородниковой Наталье Юрьевне", roster) == "Огородникова Наталья Юрьевна"
+
+
+def test_yo_and_ye_are_the_same_person():
+    """В списке пишут «Семёнов», распознавание отдаёт «Семенов»."""
+    roster = [Person("Семёнов Алексей Валерьевич")]
+    assert canonical("Семенов Алексей", roster) == "Семёнов Алексей Валерьевич"
+
+
+def test_one_matching_word_is_not_enough():
+    """Наталий на совещании бывает несколько."""
+    roster = [Person("Огородникова Наталья Юрьевна")]
+    assert canonical("Наталья", roster) == "Наталья"
+
+
+def test_two_alike_names_are_left_alone():
+    """Поставить не того хуже, чем оставить непричёсанное."""
+    roster = [Person("Семёнов Алексей Валерьевич"), Person("Семёнов Алексей Петрович")]
+    assert canonical("Семенов Алексей", roster) == "Семенов Алексей"
+
+
+def test_example_roster_reads():
+    """Образец в репозитории должен читаться тем же кодом, что и рабочие
+    списки, — иначе он показывает формат, которого нет."""
+    people = read_people(Path("examples/участники.csv"))
+    assert len(people) == 8
+    assert people[0].position == "председатель совещания"

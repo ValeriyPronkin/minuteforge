@@ -163,6 +163,34 @@ def resolve_device(requested: str, cuda_available: bool | None = None) -> str:
     return device
 
 
+def torch_device(device: str, mps_available: bool | None = None) -> str:
+    """Устройство для шагов, которые считает torch.
+
+    Распознавание и всё остальное здесь расходятся, и это не прихоть.
+    Распознавание идёт через CTranslate2 — библиотеку, которая графическое
+    ядро Apple не умеет вовсе и считает на процессоре. А выравнивание и
+    разметка голосов — обычный torch, и вот он в Apple Silicon умеет.
+
+    Поэтому на маке распознавание остаётся на процессоре, а два оставшихся
+    шага уходят на графическое ядро. Половина работы ускоряется — это не
+    полная победа, но и не «ничего нельзя».
+    """
+    if device != "cpu":
+        return device
+    if mps_available is None:
+        mps_available = _mps_available()
+    return "mps" if mps_available else "cpu"
+
+
+def _mps_available() -> bool:
+    try:
+        import torch
+    except ImportError:  # pragma: no cover — без torch распознавания нет вовсе
+        return False
+    backend = getattr(torch.backends, "mps", None)
+    return bool(backend and backend.is_available())
+
+
 def compute_type_for(device: str) -> str:
     """В каких числах считать.
 
@@ -225,6 +253,15 @@ def recognize(
     cache = Path(cache_dir) if cache_dir else None
     result = Recognition(device=device)
 
+    # Часть шагов идёт на другом устройстве — см. torch_device.
+    helper = torch_device(device)
+    if helper != device:
+        # Некоторые операции pyannote в Apple Silicon не реализованы. Без
+        # этого разрешения torch падает вместо того, чтобы посчитать их на
+        # процессоре, и разметка голосов на маке не работает вовсе.
+        os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+        logger.info("Выравнивание и разметка голосов пойдут на {}", helper)
+
     logger.info("Распознавание: модель {}, устройство {}", settings.asr_model, device)
     raw = _step(
         cache, "transcription.json", result, progress, "transcribe",
@@ -238,7 +275,7 @@ def recognize(
             raw.get("segments", []),
             language=result.language,
             audio=str(audio),
-            device=device,
+            device=helper,
         ),
     )
 
@@ -253,7 +290,7 @@ def recognize(
             aligned,
             token=token or "",
             speakers=settings.speakers,
-            device=device,
+            device=helper,
         ),
     )
     result.segments = assigned.get("segments", [])

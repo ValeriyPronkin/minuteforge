@@ -406,3 +406,14 @@ def test_cpu_counts_in_int8_not_float16():
 
     assert compute_type_for("cpu") == "int8"
     assert compute_type_for("cuda") == "float16"
+
+
+def test_apple_gpu_takes_the_torch_stages_only():
+    """Распознавание идёт через CTranslate2 — графическое ядро Apple он не
+    умеет. Выравнивание и разметка голосов обычные, torch-овые, и уходят
+    туда: половина работы ускоряется без единой настройки."""
+    from minuteforge.transcribe import torch_device
+
+    assert torch_device("cpu", mps_available=True) == "mps"
+    assert torch_device("cpu", mps_available=False) == "cpu"
+    assert torch_device("cuda", mps_available=True) == "cuda"

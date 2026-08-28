@@ -29,7 +29,7 @@ from minuteforge.blocks import (  # noqa: E402
     consolidate,
 )
 from minuteforge.audio import AudioError  # noqa: E402
-from minuteforge.config import HF_TOKEN_ENV, Settings  # noqa: E402
+from minuteforge.config import HF_TOKEN_ENV, LLM_KEY_ENV, Settings  # noqa: E402
 from minuteforge.llm import LLMClient  # noqa: E402
 from minuteforge.people import (  # noqa: E402
     merge_suggestions,
@@ -321,6 +321,18 @@ with st.sidebar:
     # небольшим и молча отрезает всё сверх него — модель не видит конца
     # фрагмента и половины поручений в нём.
     window, limit = LLMClient(Settings(llm_base_url=address)).context_window()
+    # Внешняя модель отменяет главное свойство инструмента, и человек должен
+    # это увидеть, а не вычитать в журнале. Запрета нет: у кого-то внешняя
+    # модель разрешена, и тогда качество разбора несравнимо выше.
+    probe = LLMClient(Settings(llm_base_url=address))
+    if not probe.is_local:
+        st.warning(
+            "Модель внешняя — стенограмма уйдёт на этот сервер. Записи с "
+            "ограничением доступа так обрабатывать нельзя.\n\n"
+            f"Ключ берётся из переменной окружения `{LLM_KEY_ENV}`"
+            + (" — она задана." if Settings().llm_key else ", а она не задана.")
+        )
+
     ROOMY = 8192
 
     if limit and limit >= ROOMY:

@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 import requests
 from loguru import logger
 
-from .config import Settings
+from .config import LLM_KEY_ENV, Settings
 
 
 #: Адреса, которые заведомо на этой же машине.
@@ -77,6 +77,17 @@ class LLMClient:
         self.settings = settings or Settings()
         self._session = session or self._local_session()
 
+    @property
+    def is_local(self) -> bool:
+        """Считает ли модель на этой машине.
+
+        Разница не техническая. Пока адрес локальный, ни стенограмма, ни
+        поручения никуда не уходят — это и есть главное свойство
+        инструмента. Внешний адрес его отменяет, поэтому знать об этом надо
+        явно, а не догадываться по настройкам.
+        """
+        return urlparse(self.settings.llm_base_url).hostname in LOCAL_HOSTS
+
     def _local_session(self) -> requests.Session:
         """Сессия, которая не пойдёт к соседу через проходную.
 
@@ -86,9 +97,27 @@ class LLMClient:
         это выглядит как «Ollama не запущена», хотя она работает.
         """
         session = requests.Session()
-        if urlparse(self.settings.llm_base_url).hostname in LOCAL_HOSTS:
+        if self.is_local:
             session.trust_env = False
+        else:
+            # Наружу — через прокси, как настроено на машине: в закрытом
+            # контуре другого пути нет.
+            logger.warning(
+                "Модель внешняя: {} — стенограмма уйдёт на этот сервер. "
+                "Для записей с ограничением доступа так нельзя.",
+                self.settings.llm_base_url,
+            )
         return session
+
+    def _headers(self) -> dict[str, str]:
+        """Ключ добавляется, только если он задан.
+
+        Локальные серверы ключа не спрашивают, а внешние без него отвечают
+        отказом 401 — и без явной подсказки это выглядит как «модель не
+        найдена».
+        """
+        key = self.settings.llm_key
+        return {"Authorization": f"Bearer {key}"} if key else {}
 
     @property
     def base_url(self) -> str:
@@ -148,7 +177,8 @@ class LLMClient:
             started = time.perf_counter()
             try:
                 response = self._session.post(
-                    self.endpoint, json=payload, timeout=self.settings.llm_timeout_s
+                    self.endpoint, json=payload, headers=self._headers(),
+                    timeout=self.settings.llm_timeout_s,
                 )
             except requests.exceptions.ConnectionError as exc:
                 # Повторять нечего: сервер не запущен, и сам он не запустится.
@@ -164,6 +194,13 @@ class LLMClient:
                 )
                 continue
 
+            if response.status_code in (401, 403):
+                # Повторять нечего: ключ не появится сам.
+                raise LLMError(
+                    f"Сервер модели не принял ключ ({response.status_code}). "
+                    f"Внешние модели требуют ключ в переменной окружения "
+                    f"{LLM_KEY_ENV}; в файл настроек его класть нельзя."
+                )
             if response.status_code >= 500:
                 last_error = LLMError(f"Сервер модели вернул {response.status_code}")
                 logger.warning("Сервер модели вернул {} (попытка {})", response.status_code, attempt)
@@ -210,7 +247,7 @@ class LLMClient:
         """
         url = f"{self.base_url}/models"
         try:
-            response = self._session.get(url, timeout=10)
+            response = self._session.get(url, headers=self._headers(), timeout=10)
             if getattr(response, "status_code", 0) != 200:
                 return []
             body = response.json()
@@ -244,6 +281,7 @@ class LLMClient:
                 # И «model», и «name»: у Ollama менялось имя поля, а старые
                 # версии на новое отвечают отказом, и наоборот.
                 json={"model": self.settings.llm_model, "name": self.settings.llm_model},
+                headers=self._headers(),
                 timeout=10,
             )
             if getattr(response, "status_code", 0) != 200:

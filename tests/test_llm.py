@@ -24,7 +24,7 @@ class FakeSession:
         self.responses = list(responses)
         self.calls = []
 
-    def post(self, url, *, json, timeout):
+    def post(self, url, *, json, timeout, headers=None):
         self.calls.append({"url": url, "json": json, "timeout": timeout})
         item = self.responses.pop(0) if self.responses else self.responses
         if isinstance(item, Exception):
@@ -188,7 +188,7 @@ class ModelsSession(FakeSession):
         self.models_response = models_response
         self.asked = []
 
-    def get(self, url, *, timeout):
+    def get(self, url, *, timeout, headers=None):
         self.asked.append(url)
         if isinstance(self.models_response, Exception):
             raise self.models_response
@@ -335,3 +335,49 @@ def test_undeclared_limit_is_reported_as_unknown():
     window, limit = LLMClient(FAST, FakeSession(show)).context_window()
     assert window == 32768
     assert limit is None
+
+
+def test_key_is_sent_only_when_it_exists(monkeypatch):
+    """Локальные серверы ключа не спрашивают, внешние без него отвечают
+    отказом — и это выглядит как «модель не найдена»."""
+    from minuteforge.config import LLM_KEY_ENV
+
+    monkeypatch.delenv(LLM_KEY_ENV, raising=False)
+    assert LLMClient(Settings())._headers() == {}
+
+    monkeypatch.setenv(LLM_KEY_ENV, "sk-секрет")
+    assert LLMClient(Settings())._headers() == {"Authorization": "Bearer sk-секрет"}
+
+
+def test_key_never_lands_in_saved_settings(monkeypatch):
+    """Файл настроек показывают, пересылают и кладут в репозиторий."""
+    from dataclasses import asdict
+
+    from minuteforge.config import LLM_KEY_ENV
+
+    monkeypatch.setenv(LLM_KEY_ENV, "sk-секрет")
+    assert "sk-секрет" not in str(asdict(Settings()))
+
+
+def test_external_address_is_recognised_as_external():
+    """Пока адрес локальный, стенограмма никуда не уходит. Внешний адрес это
+    свойство отменяет, и знать об этом надо явно."""
+    assert LLMClient(Settings(llm_base_url="http://localhost:11434")).is_local
+    assert not LLMClient(Settings(llm_base_url="https://api.openai.com/v1")).is_local
+
+
+def test_rejected_key_is_not_retried():
+    """Ключ сам не появится: повторы только съедят время таймаута."""
+    calls = []
+
+    class Refusing:
+        trust_env = True
+
+        def post(self, url, **kwargs):
+            calls.append(url)
+            return FakeResponse({}, status_code=401)
+
+    client = LLMClient(Settings(llm_base_url="https://api.example.com/v1"), Refusing())
+    with pytest.raises(LLMError, match="ключ"):
+        client.complete("система", "вопрос")
+    assert len(calls) == 1

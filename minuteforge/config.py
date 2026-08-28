@@ -20,6 +20,8 @@ except Exception:  # pragma: no cover
 
 #: Переменные окружения, откуда берутся секреты. В ``config.yaml`` им не место.
 HF_TOKEN_ENV = "HF_TOKEN"
+#: Ключ к внешней модели. Тоже только из окружения и по той же причине.
+LLM_KEY_ENV = "MINUTEFORGE_LLM_KEY"
 
 
 @dataclass
@@ -124,6 +126,18 @@ class Settings:
         журнал или в сохранённые настройки вместе со всем остальным.
         """
         return os.environ.get(HF_TOKEN_ENV) or None
+
+    @property
+    def llm_key(self) -> str | None:
+        """Ключ к внешней модели — только из окружения.
+
+        Локальному серверу ключ не нужен, и обычно его тут нет. Он появляется
+        у тех, кто сознательно подключил внешнюю модель, и хранить его в
+        файле настроек нельзя ровно по той же причине, что и токен
+        HuggingFace: файл настроек показывают, пересылают и кладут в
+        репозиторий.
+        """
+        return os.environ.get(LLM_KEY_ENV) or None
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "Settings":

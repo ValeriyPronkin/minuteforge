@@ -114,6 +114,10 @@ class Settings:
     #: Оставлять ли промежуточное после готового протокола. По умолчанию нет:
     #: гигабайты копятся незаметно, а нужны они редко.
     keep_work_files: bool = False
+
+    #: Заголовок в шапке приложения и на вкладке браузера. В организации у
+    #: инструмента бывает своё имя, и «minuteforge» ей ничего не говорит.
+    app_title: str = "minuteforge"
     log_dir: Path = field(default_factory=lambda: Path("logs"))
     log_level: str = "INFO"
 

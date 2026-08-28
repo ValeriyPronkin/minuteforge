@@ -66,3 +66,10 @@ def test_example_is_used_until_there_is_a_config_of_your_own(tmp_path, monkeypat
 
     (tmp_path / "config.yaml").write_text("asr_model: large-v3\n", encoding="utf-8")
     assert Settings.load().asr_model == "large-v3"
+
+
+def test_title_can_be_renamed_for_the_organisation():
+    """В организации у инструмента бывает своё имя, и «minuteforge» ей
+    ничего не говорит."""
+    assert Settings().app_title == "minuteforge"
+    assert Settings(app_title="Протоколы совещаний").app_title == "Протоколы совещаний"

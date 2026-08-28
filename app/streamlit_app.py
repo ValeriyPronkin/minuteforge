@@ -75,7 +75,7 @@ OUTPUT_DIR = Path(BASE.output_dir) if Path(BASE.output_dir).is_absolute() else R
 #: Что считаем записью совещания при выборе файла с диска.
 MEDIA_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v", ".wav", ".m4a", ".mp3"}
 
-st.set_page_config(page_title="minuteforge", page_icon="📝", layout="wide")
+st.set_page_config(page_title=BASE.app_title, page_icon="📝", layout="wide")
 
 
 def full_width() -> dict:
@@ -499,7 +499,7 @@ settings = Settings(
 )
 
 # ---------------------------------------------------------------- шапка
-st.title("minuteforge")
+st.title(BASE.app_title)
 st.caption("Протокол видеосовещания с поручениями. Ничего не уходит с этой машины.")
 
 

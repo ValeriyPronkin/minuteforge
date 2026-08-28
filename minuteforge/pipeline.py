@@ -265,6 +265,34 @@ def process(
     )
 
 
+def cache_size(work_dir: str | Path) -> int:
+    """Сколько байт занято промежуточным.
+
+    Гигабайты копятся незаметно: извлечённый звук остаётся после каждой
+    записи, а нужен он только чтобы не считать заново. Пока размер не видно,
+    его никто и не чистит.
+    """
+    folder = Path(work_dir).expanduser()
+    if not folder.exists():
+        return 0
+    return sum(f.stat().st_size for f in folder.rglob("*") if f.is_file())
+
+
+def clear_cache(work_dir: str | Path) -> int:
+    """Убирает промежуточное. Возвращает, сколько байт освободилось.
+
+    Готовые файлы это не трогает: они лежат в другой папке. Потеряется
+    только возможность пересобрать протокол без повторного распознавания —
+    но стенограмма к тому времени уже сохранена, и пересобирать можно из
+    неё.
+    """
+    folder = Path(work_dir).expanduser()
+    freed = cache_size(folder)
+    if folder.exists():
+        shutil.rmtree(folder, ignore_errors=True)
+    return freed
+
+
 def check_writable(out_dir: str | Path) -> str:
     """Можно ли туда писать. Пустая строка — можно.
 

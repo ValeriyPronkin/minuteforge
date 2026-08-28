@@ -512,3 +512,31 @@ def test_writability_check_leaves_nothing_behind(tmp_path):
 
     check_writable(tmp_path)
     assert list(tmp_path.iterdir()) == []
+
+
+def test_cache_can_be_measured_and_cleared(tmp_path):
+    """Гигабайты копятся незаметно: звук остаётся после каждой записи, а
+    нужен только чтобы не считать заново."""
+    from minuteforge.pipeline import cache_size, clear_cache
+
+    work = tmp_path / "work"
+    (work / "запись-abc123").mkdir(parents=True)
+    (work / "запись-abc123" / "meeting.wav").write_bytes(b"x" * 2048)
+
+    assert cache_size(work) == 2048
+    assert clear_cache(work) == 2048
+    assert cache_size(work) == 0
+
+
+def test_clearing_the_cache_does_not_touch_the_results(tmp_path):
+    """Готовые файлы лежат в другой папке и должны остаться."""
+    from minuteforge.pipeline import clear_cache
+
+    work, out = tmp_path / "work", tmp_path / "out"
+    work.mkdir()
+    (work / "meeting.wav").write_bytes(b"x")
+    out.mkdir()
+    (out / "протокол.md").write_text("# Протокол", encoding="utf-8")
+
+    clear_cache(work)
+    assert (out / "протокол.md").exists()

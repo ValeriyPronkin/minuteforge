@@ -39,7 +39,9 @@ from minuteforge.people import (  # noqa: E402
 )
 from minuteforge.pipeline import (  # noqa: E402
     Meeting,
+    cache_size,
     check_writable,
+    clear_cache,
     protocol_from_transcript,
     _free_name,
     run_dir,
@@ -54,7 +56,9 @@ from minuteforge.transcribe import (  # noqa: E402
 )
 
 BASE = Settings.load(ROOT / "config.yaml")
-WORK_DIR = ROOT / "data" / "work"
+WORK_DIR = (
+    Path(BASE.work_dir) if Path(BASE.work_dir).is_absolute() else ROOT / BASE.work_dir
+)
 INPUT_DIR = Path(BASE.input_dir) if Path(BASE.input_dir).is_absolute() else ROOT / BASE.input_dir
 OUTPUT_DIR = Path(BASE.output_dir) if Path(BASE.output_dir).is_absolute() else ROOT / BASE.output_dir
 
@@ -234,6 +238,19 @@ with st.sidebar:
     trouble = check_writable(out_dir)
     if trouble:
         st.error(trouble)
+
+    # Промежуточное копится незаметно: звук остаётся после каждой записи, а
+    # нужен он только чтобы не считать заново. Пока размер не видно, его
+    # никто и не чистит.
+    busy = cache_size(WORK_DIR)
+    if busy > 500 * 1024 * 1024:
+        st.caption(f"Промежуточные файлы занимают {busy / 1024 ** 3:.1f} ГБ")
+        if st.button("Очистить промежуточное", **full_width()):
+            freed = clear_cache(WORK_DIR)
+            st.success(
+                f"Освобождено {freed / 1024 ** 3:.1f} ГБ. Готовые файлы на месте — "
+                "они в другой папке."
+            )
 
     st.header("Документ")
     roster_file = st.file_uploader(

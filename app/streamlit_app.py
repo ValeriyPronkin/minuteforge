@@ -29,7 +29,13 @@ from minuteforge.blocks import (  # noqa: E402
     consolidate,
 )
 from minuteforge.audio import AudioError  # noqa: E402
-from minuteforge.config import HF_TOKEN_ENV, LLM_KEY_ENV, Settings  # noqa: E402
+from minuteforge.config import (  # noqa: E402
+    CONFIG_EXAMPLE,
+    CONFIG_FILE,
+    HF_TOKEN_ENV,
+    LLM_KEY_ENV,
+    Settings,
+)  # noqa: E402
 from minuteforge.llm import LLMClient, is_embedder, same_model  # noqa: E402
 from minuteforge.people import (  # noqa: E402
     merge_suggestions,
@@ -56,7 +62,10 @@ from minuteforge.transcribe import (  # noqa: E402
     check_model_access,
 )
 
-BASE = Settings.load(ROOT / "config.yaml")
+# Свой файл, а нет своего — образец из репозитория. Свой в репозитории не
+# лежит: его правят под своё место работы, и обновление затирало бы правки.
+_own = ROOT / CONFIG_FILE
+BASE = Settings.load(_own if _own.exists() else ROOT / CONFIG_EXAMPLE)
 WORK_DIR = (
     Path(BASE.work_dir) if Path(BASE.work_dir).is_absolute() else ROOT / BASE.work_dir
 )

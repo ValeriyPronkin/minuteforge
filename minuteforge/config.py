@@ -147,9 +147,15 @@ class Settings:
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "Settings":
-        """Собирает настройки из файла и окружения."""
+        """Собирает настройки из файла и окружения.
+
+        Свой ``config.yaml`` в репозитории не лежит: его правят под своё
+        место работы — пути к папкам, адрес сервера, — и обновление
+        приложения такие правки затирало бы конфликтом. В репозитории лежит
+        только образец, а он берётся, пока своего файла нет.
+        """
         values: dict[str, Any] = {}
-        path = Path(path) if path else Path("config.yaml")
+        path = Path(path) if path else _config_path()
         if path.exists() and yaml is not None:
             loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
             values.update({k: v for k, v in loaded.items() if k in _names()})
@@ -164,6 +170,17 @@ class Settings:
     def to_dict(self) -> dict[str, Any]:
         """Настройки для журнала. Секретов здесь нет и быть не должно."""
         return {k: str(v) if isinstance(v, Path) else v for k, v in asdict(self).items()}
+
+
+#: Файл настроек и образец, из которого его делают.
+CONFIG_FILE = "config.yaml"
+CONFIG_EXAMPLE = "config.example.yaml"
+
+
+def _config_path() -> Path:
+    """Свой файл, а нет своего — образец из репозитория."""
+    own = Path(CONFIG_FILE)
+    return own if own.exists() else Path(CONFIG_EXAMPLE)
 
 
 def _names() -> set[str]:

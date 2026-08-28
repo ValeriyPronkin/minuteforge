@@ -53,4 +53,16 @@ def test_work_files_are_cleaned_by_default():
     """Гигабайты копятся незаметно, а нужны редко: место экономится само,
     а кому нужно — тот включит хранение."""
     assert Settings().keep_work_files is False
-    assert Settings.load("config.yaml").keep_work_files is False
+    assert Settings.load("config.example.yaml").keep_work_files is False
+
+
+def test_example_is_used_until_there_is_a_config_of_your_own(tmp_path, monkeypatch):
+    """Свой config.yaml в репозитории не лежит: его правят под своё место
+    работы, и обновление приложения затирало бы правки конфликтом."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.example.yaml").write_text("asr_model: small\n", encoding="utf-8")
+
+    assert Settings.load().asr_model == "small"
+
+    (tmp_path / "config.yaml").write_text("asr_model: large-v3\n", encoding="utf-8")
+    assert Settings.load().asr_model == "large-v3"

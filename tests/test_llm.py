@@ -381,3 +381,24 @@ def test_rejected_key_is_not_retried():
     with pytest.raises(LLMError, match="ключ"):
         client.complete("система", "вопрос")
     assert len(calls) == 1
+
+
+def test_model_matches_despite_the_tag():
+    """Ollama показывает «mistral:latest», в настройках пишут «mistral».
+    Без этого сравнения настройка не находилась в списке, и приложение
+    молча брало первую по алфавиту — обычно bge-m3."""
+    from minuteforge.llm import same_model
+
+    assert same_model("mistral:latest", "mistral")
+    assert same_model("qwen2.5:14b", "qwen2.5:7b")
+    assert not same_model("mistral:latest", "llama3.1")
+
+
+def test_embedding_models_are_recognised():
+    """Разговаривать они не умеют: на просьбу найти поручения сервер вернёт
+    пустоту, и выглядит это как поломка приложения."""
+    from minuteforge.llm import is_embedder
+
+    assert is_embedder("bge-m3:latest")
+    assert is_embedder("nomic-embed-text")
+    assert not is_embedder("mistral:latest")

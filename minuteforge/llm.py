@@ -70,6 +70,26 @@ class Reply:
     truncated: bool = False
 
 
+#: Модели эмбеддингов. Разговаривать они не умеют вовсе: на просьбу найти
+#: поручения сервер вернёт отказ или пустоту, и выглядит это как поломка
+#: приложения. Список короткий и закрытый — угадывать по имени нечего.
+EMBEDDERS = ("bge-", "nomic-embed", "mxbai-embed", "all-minilm", "snowflake-arctic-embed")
+
+
+def same_model(one: str, other: str) -> bool:
+    """Одна ли это модель.
+
+    Ollama показывает модели с тегом — `mistral:latest`, — а в настройках
+    пишут `mistral`. Без этого сравнения настройка не находилась в списке, и
+    приложение молча брало первую по алфавиту.
+    """
+    return one.split(":")[0].strip().lower() == other.split(":")[0].strip().lower()
+
+
+def is_embedder(name: str) -> bool:
+    return any(name.strip().lower().startswith(mark) for mark in EMBEDDERS)
+
+
 class LLMClient:
     """Клиент к локальному серверу модели."""
 

@@ -30,7 +30,7 @@ from minuteforge.blocks import (  # noqa: E402
 )
 from minuteforge.audio import AudioError  # noqa: E402
 from minuteforge.config import HF_TOKEN_ENV, LLM_KEY_ENV, Settings  # noqa: E402
-from minuteforge.llm import LLMClient  # noqa: E402
+from minuteforge.llm import LLMClient, is_embedder, same_model  # noqa: E402
 from minuteforge.people import (  # noqa: E402
     merge_suggestions,
     mentioned_people,
@@ -291,8 +291,20 @@ with st.sidebar:
     installed = LLMClient(Settings(llm_base_url=address)).available_models()
 
     if installed:
-        default = installed.index(BASE.llm_model) if BASE.llm_model in installed else 0
+        # По имени без тега: в настройках пишут «mistral», а Ollama
+        # показывает «mistral:latest». Без этого настройка не находилась, и
+        # бралась первая по алфавиту — обычно модель эмбеддингов.
+        default = next(
+            (i for i, name in enumerate(installed) if same_model(name, BASE.llm_model)),
+            0,
+        )
         llm_model = st.selectbox("Модель", installed, index=default)
+        if is_embedder(llm_model):
+            st.error(
+                f"«{llm_model}» — модель эмбеддингов, разговаривать она не "
+                "умеет и поручений не найдёт. Выберите разговорную: mistral, "
+                "qwen2.5, llama3.1."
+            )
         st.caption(
             "Для извлечения поручений семимиллиардные модели слабоваты — "
             "недобирают половину. Заметно лучше qwen2.5:14b, если хватает "
@@ -362,10 +374,15 @@ with st.sidebar:
             "`ollama create моя-модель -f Modelfile`"
         )
 
+    # Когда сервер молчит о своём пределе, берётся самое тесное значение, а
+    # не то, что в настройках. Послать меньше, чем сервер примет, — потерять
+    # связность фрагмента. Послать больше — потерять его конец молча, и это
+    # хуже: со стороны выглядит как «модель ничего не находит».
+    safe_default = limit if limit in (2048, 4096, 8192, 16384, 32768) else 2048
     context = st.select_slider(
         "Окно модели, токенов",
         options=[2048, 4096, 8192, 16384, 32768, 131072, 1_000_000],
-        value=limit if limit in (2048, 4096, 8192, 16384, 32768) else BASE.llm_context_tokens,
+        value=safe_default,
         help="Отсюда считается размер фрагмента. Нарезка нужна ровно потому, "
         "что стенограмма не влезает в окно целиком: при большом окне фрагмент "
         "будет один, и повторов на границах не возникнет вовсе.",

@@ -201,10 +201,26 @@ class LLMClient:
                     timeout=self.settings.llm_timeout_s,
                 )
             except requests.exceptions.ConnectionError as exc:
-                # Повторять нечего: сервер не запущен, и сам он не запустится.
+                # Раньше сдавались сразу: «сервер не запущен, сам он не
+                # запустится». Оказалось, что бывает и третье. Ollama
+                # перезапускает рантайм, когда модель не влезла в
+                # видеопамять — а после распознавания её занимает torch, — и
+                # на эти несколько секунд сервер отказывает в соединении.
+                # Со стороны это выглядело как «модель не отвечает», хотя
+                # достаточно подождать.
+                last_error = exc
+                if attempt <= self.settings.llm_retries:
+                    logger.warning(
+                        "Сервер отказал в соединении (попытка {}), жду и повторяю",
+                        attempt,
+                    )
+                    time.sleep(min(3 * attempt, 15))
+                    continue
                 raise LLMUnavailable(
                     f"Модель не отвечает по адресу {self.settings.llm_base_url}. "
-                    "Запущен ли Ollama или LM Studio и слушает ли он этот порт?"
+                    "Запущен ли Ollama или LM Studio и слушает ли он этот порт? "
+                    "Если сервер запущен, ему могло не хватить видеопамяти: "
+                    "проверьте ollama ps — модель должна быть на 100% GPU."
                 ) from exc
             except requests.exceptions.Timeout as exc:
                 last_error = exc

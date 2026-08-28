@@ -49,8 +49,15 @@ class FakeClient:
     def __init__(self, *answers):
         self.answers = list(answers) or [ANSWER]
         self.prompts = []
+        self.warmed = False
 
     def complete(self, system, user, **kwargs):
+        # Прогрев — не разбор: он идёт до фрагментов, чтобы загрузка модели в
+        # видеопамять не выглядела отказом сервера. В очередь ответов он не
+        # лезет, иначе первый фрагмент остался бы без ответа.
+        if user == "Готов?":
+            self.warmed = True
+            return Reply(text="Да")
         self.prompts.append(user)
         return Reply(text=self.answers.pop(0) if self.answers else NOTHING_FOUND)
 
@@ -454,3 +461,33 @@ def test_second_protocol_does_not_overwrite_the_first(tmp_path):
     assert first["protocol"].name == "протокол.md"
     assert second["protocol"].name == "протокол_2.md"
     assert first["protocol"].exists()
+
+
+def test_model_is_warmed_up_before_the_run():
+    """Загрузка модели в видеопамять занимает десятки секунд, и раньше в это
+    окно попадал первый рабочий запрос: человек видел «модель не отвечает» на
+    записи, которую только что сорок минут распознавали."""
+    from minuteforge.pipeline import warm_up
+
+    asked = []
+
+    class Model:
+        def complete(self, system, user, **kwargs):
+            asked.append(user)
+            return Reply(text="Готов")
+
+    warm_up(Model())
+    assert asked == ["Готов?"]
+
+
+def test_failed_warm_up_does_not_stop_the_run():
+    """Настоящие запросы всё равно повторяются — сдаваться на прогреве не за
+    что."""
+    from minuteforge.llm import LLMUnavailable
+    from minuteforge.pipeline import warm_up
+
+    class Dead:
+        def complete(self, system, user, **kwargs):
+            raise LLMUnavailable("сервер молчит")
+
+    warm_up(Dead())

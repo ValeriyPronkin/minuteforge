@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import pytest
 import requests
 
@@ -82,13 +84,15 @@ def test_missing_usage_is_not_an_error():
 def test_server_not_running_says_so_plainly():
     """Самая частая ошибка при первом запуске — не поднят сервер модели.
 
-    Повторять запрос бессмысленно: сам он не запустится, поэтому это
-    отдельная ошибка с адресом в тексте.
+    Повторы делаются: Ollama перезапускает рантайм, когда модель не влезла в
+    видеопамять, и на эти секунды отказывает в соединении. Но если сервера
+    нет вовсе, сказать надо прямо и с адресом в тексте.
     """
-    session = FakeSession(requests.exceptions.ConnectionError("отказано"))
-    with pytest.raises(LLMUnavailable, match="11434"):
-        LLMClient(Settings(), session).complete("s", "u")
-    assert len(session.calls) == 1, "повторов быть не должно"
+    session = FakeSession(*[requests.exceptions.ConnectionError("отказано")] * 4)
+    with patch("time.sleep"):
+        with pytest.raises(LLMUnavailable, match="11434"):
+            LLMClient(Settings(llm_retries=1), session).complete("s", "u")
+    assert len(session.calls) == 2, "одна попытка и один повтор"
 
 
 def test_timeout_is_retried():
@@ -133,7 +137,9 @@ def test_answer_without_choices_is_an_error_not_an_empty_string():
 
 def test_health_check_before_a_long_run():
     assert LLMClient(FAST, FakeSession(answer("ок"))).health() is True
-    assert LLMClient(FAST, FakeSession(requests.exceptions.ConnectionError())).health() is False
+    with patch("time.sleep"):
+        dead = FakeSession(*[requests.exceptions.ConnectionError()] * 4)
+        assert LLMClient(FAST, dead).health() is False
 
 
 def test_max_tokens_can_be_overridden_per_request():
@@ -151,7 +157,10 @@ def test_server_down_and_model_missing_are_different_diagnoses():
     почти всегда не скачана модель. Сказать «не отвечает» во втором случае
     значит отправить человека чинить исправное.
     """
-    down = LLMClient(FAST, FakeSession(requests.exceptions.ConnectionError())).diagnose()
+    with patch("time.sleep"):
+        down = LLMClient(
+            FAST, FakeSession(*[requests.exceptions.ConnectionError()] * 4)
+        ).diagnose()
     assert "11434" in down
     assert "pull" not in down, "чинить надо сервер, а не скачивать модель"
 
@@ -402,3 +411,38 @@ def test_embedding_models_are_recognised():
     assert is_embedder("bge-m3:latest")
     assert is_embedder("nomic-embed-text")
     assert not is_embedder("mistral:latest")
+
+
+def test_refused_connection_is_retried_before_giving_up():
+    """Ollama перезапускает рантайм, когда модель не влезла в видеопамять —
+    после распознавания её занимает torch. На эти секунды сервер отказывает
+    в соединении, и раньше мы сдавались сразу."""
+    tries = []
+
+    class Flaky:
+        trust_env = True
+
+        def post(self, url, **kwargs):
+            tries.append(url)
+            if len(tries) < 3:
+                raise requests.exceptions.ConnectionError("refused")
+            return FakeResponse({"choices": [{"message": {"content": "Готово"}}]})
+
+    client = LLMClient(Settings(llm_retries=3), Flaky())
+    with patch("time.sleep"):
+        assert client.complete("система", "вопрос").text == "Готово"
+    assert len(tries) == 3
+
+
+def test_server_that_never_answers_is_reported_once():
+    """Повторы не бесконечны: если сервер не поднят, сказать надо прямо."""
+    class Dead:
+        trust_env = True
+
+        def post(self, url, **kwargs):
+            raise requests.exceptions.ConnectionError("refused")
+
+    client = LLMClient(Settings(llm_retries=1), Dead())
+    with patch("time.sleep"):
+        with pytest.raises(LLMUnavailable, match="не отвечает по адресу"):
+            client.complete("система", "вопрос")

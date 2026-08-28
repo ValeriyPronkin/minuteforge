@@ -221,6 +221,8 @@ def protocol_from_transcript(
     )
     logger.info("Стенограмма разбита на {} фрагментов", len(chunks))
 
+    warm_up(client, progress)
+
     answers: list[str] = []
     tasks = extract_tasks(
         chunks, client, progress=progress, answers=answers,
@@ -261,6 +263,28 @@ def process(
     return protocol_from_transcript(
         transcript, settings, meeting=meeting, client=client, progress=progress
     )
+
+
+def warm_up(client, progress=None) -> None:
+    """Заставляет сервер загрузить модель до начала разбора.
+
+    Загрузка семимиллиардной модели в видеопамять занимает десятки секунд, а
+    после распознавания память ещё занята torch, и Ollama может перезапустить
+    свой рантайм — на эти секунды сервер отказывает в соединении.
+
+    Раньше в это окно попадал первый же рабочий запрос, и человек видел
+    «модель не отвечает» на записи, которую только что сорок минут
+    распознавали. Здесь то же ожидание проходит один раз, отдельным шагом, и
+    неудача его не останавливает: настоящие запросы всё равно повторяются.
+    """
+    from .transcribe import Step, report
+
+    report(progress, Step(name="warmup", title="Гружу модель в память", share=0.0))
+    try:
+        client.complete("Ответь одним словом.", "Готов?", max_tokens=8)
+    except Exception as exc:
+        logger.warning("Прогрев не удался, продолжаю: {}", exc)
+    report(progress, Step(name="warmup", title="Модель загружена", done=True, share=0.0))
 
 
 def run_dir(out_dir: str | Path, stem: str, *, stamp: datetime | None = None) -> Path:

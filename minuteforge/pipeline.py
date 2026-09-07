@@ -28,7 +28,7 @@ from .blocks import (
     drop_soundcheck,
     rename_speakers,
 )
-from .checks import suspicious
+from .checks import Suspicion, suspicious
 from .chunking import split_into_chunks
 from .config import Settings
 from .llm import LLMClient
@@ -371,15 +371,21 @@ def _free_name(path: Path) -> Path:
     return path
 
 
-def _text_with_head(transcript: Transcript) -> str:
-    """Стенограмма с шапкой: чем распознано, что уступили, где приврано."""
+def _text_with_head(transcript: Transcript, marks: Sequence[Suspicion] | None = None) -> str:
+    """Стенограмма с шапкой: чем распознано, что уступили, где приврано.
+
+    :param marks: уже посчитанные подозрительные места. Передаются, чтобы не
+        считать их дважды там, где о них ещё и в журнал пишут.
+    """
     head = []
     if transcript.model:
         head.append(f"# Распознано моделью {transcript.model}")
     head.extend(f"# {note}" for note in transcript.notes)
     # Подозрительные места — тут же, в шапке, а не отдельным файлом: тот, кто
     # читает стенограмму, должен наткнуться на них прежде, чем поверит тексту.
-    head.extend(f"# ПРОВЕРИТЬ. {item.as_line()}" for item in suspicious(transcript.blocks))
+    if marks is None:
+        marks = suspicious(transcript.blocks)
+    head.extend(f"# ПРОВЕРИТЬ. {item.as_line()}" for item in marks)
     body = transcript.as_text(with_time=True)
     return "\n".join([*head, "", body]) if head else body
 
@@ -406,7 +412,8 @@ def save_transcript(
     # подразделение отдельным файлом, без интерфейса и без лога, и там
     # должно быть видно, чем она сделана: спор о том, «Ессентуки» или
     # «Исинтуки» сказал докладчик, решается именно этим.
-    text.write_text(_text_with_head(transcript), encoding="utf-8")
+    marks = suspicious(transcript.blocks)
+    text.write_text(_text_with_head(transcript, marks), encoding="utf-8")
 
     data = _free_name(out_dir / f"{stem}.json")
     data.write_text(
@@ -421,7 +428,12 @@ def save_transcript(
         encoding="utf-8",
     )
 
-    logger.info("Стенограмма сохранена: {} и {}", text.name, data.name)
+    # Счёт подозрительных мест — в журнал: без него «в файле ничего нет»
+    # значит сразу две разные вещи — не нашлось или не записалось.
+    logger.info(
+        "Стенограмма сохранена: {} и {}; шапка: модель {}, подозрительных мест {}",
+        text.name, data.name, transcript.model or "не указана", len(marks),
+    )
     return {"text": text, "json": data}
 
 

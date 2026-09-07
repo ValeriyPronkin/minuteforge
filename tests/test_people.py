@@ -184,3 +184,45 @@ def test_example_roster_reads():
     people = read_people(Path("examples/участники.csv"))
     assert len(people) == 8
     assert people[0].position == "председатель совещания"
+
+
+def test_position_ends_where_the_position_ends():
+    """«…, заместитель мэра города Биробиджан, вы с нами сегодня» — вопрос
+    ведущего не должность, и в реквизите протокола ему места нет."""
+    from minuteforge.people import mentioned_people
+
+    found = mentioned_people(
+        "Павленко Андрей Васильевич, заместитель мэра города Биробиджан, вы с нами сегодня?"
+    )
+
+    assert found[0].position == "заместитель мэра города Биробиджан"
+
+
+def test_a_name_heard_once_does_not_sign_someone_elses_voice():
+    """Живой случай: искажённое приветствие в адрес ведущего подписало его
+    чужим именем, и оно ушло в тридцать поручений как исполнитель.
+
+    Неопознанный голос честнее голоса с чужой фамилией.
+    """
+    from minuteforge.people import suggest_speakers
+
+    guesses = suggest_speakers([
+        Block("SPEAKER_09", "Бакшин Влад Кирилл, здравствуйте."),
+        Block("SPEAKER_02", "Ну вы примите меры."),
+    ])
+
+    assert guesses == {}
+
+
+def test_a_name_heard_again_is_trusted():
+    """Названный по-настоящему участник звучит несколько раз: его
+    представляют, ему передают слово, к нему обращаются."""
+    from minuteforge.people import suggest_speakers
+
+    guesses = suggest_speakers([
+        Block("SPEAKER_09", "Голованова Александра Николаевна, здравствуйте."),
+        Block("SPEAKER_19", "Добрый день, коллеги."),
+        Block("SPEAKER_02", "Александра Николаевна, у нас здесь задержка."),
+    ])
+
+    assert guesses["SPEAKER_19"].name == "Голованова Александра Николаевна"

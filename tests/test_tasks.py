@@ -753,3 +753,66 @@ def test_declension_does_not_break_the_match():
 
     assert _named_in("просьба к Огородниковой подготовить", "Огородникова Наталья")
     assert not _named_in("просьба подготовить справку", "Огородникова Наталья")
+
+
+def test_a_statement_is_not_an_order():
+    """Главный источник мусора в протоколе — не выдумки, а настоящие фразы,
+    переписанные в повелительном наклонении."""
+    from minuteforge.tasks import is_directive
+
+    assert not is_directive("Видим показатели мощности.")
+    assert not is_directive("Вот эта техника, она стоит третий год.")
+    assert not is_directive("В МАКСе создана группа, где мы еженедельно отчитываемся.")
+    assert not is_directive("Кто отвечает за вывоз крупногабаритного мусора?")
+
+    assert is_directive("У меня просьба усилить мониторинг всего региона.")
+    assert is_directive("Организуйте сейчас фотоотчет.")
+    assert is_directive("Необходимо уже сейчас обеспечить выполнение объёма.")
+    assert is_directive("Штаб должен начать работать по-другому.")
+
+
+def test_a_reproach_in_the_past_is_not_an_order():
+    """«Должен был принять и рассчитаться» — упрёк за несделанное."""
+    from minuteforge.tasks import is_directive
+
+    assert not is_directive("Он должен был принять, проверить и рассчитаться.")
+
+
+def test_orders_without_an_order_in_the_source_are_dropped():
+    from minuteforge.tasks import Task, keep_directives
+
+    kept = keep_directives([
+        Task(what="Проанализировать показатели мощности", quote="Видим показатели мощности."),
+        Task(what="Усилить мониторинг", quote="У меня просьба усилить мониторинг."),
+        Task(what="Без источника проверить нечем", quote=""),
+    ])
+
+    assert [task.what for task in kept] == [
+        "Усилить мониторинг", "Без источника проверить нечем",
+    ]
+
+
+def test_one_reply_gives_one_order():
+    """Модель разбирает стенограмму с нахлёстом и одну фразу выписывает
+    дважды разными словами. Для делопроизводителя это один пункт."""
+    from minuteforge.tasks import Task, one_per_place
+
+    quote = "Все фотографии отправьте губернатору с подробным отчётом."
+    kept = one_per_place([
+        Task(what="Отправить фотографии губернатору", quote=quote),
+        Task(what="Отправить фотографии и подробный отчёт губернатору", who="Штаб", quote=quote),
+    ])
+
+    assert len(kept) == 1
+    assert kept[0].who == "Штаб", "остаётся то, где назван исполнитель"
+
+
+def test_different_replies_keep_their_own_orders():
+    from minuteforge.tasks import Task, one_per_place
+
+    kept = one_per_place([
+        Task(what="Отправить фотографии", quote="Фотографии отправьте губернатору."),
+        Task(what="Отправить фотографии", quote="И в министерство фотографии направьте."),
+    ])
+
+    assert len(kept) == 2

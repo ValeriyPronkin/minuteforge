@@ -197,6 +197,32 @@ _POSITION = re.compile(
     re.IGNORECASE,
 )
 
+#: С этих слов должность начинаться не может — с них начинается следующая
+#: мысль. «Павленко Андрей Васильевич, заместитель мэра города Биробиджан,
+#: вы с нами сегодня» — должность кончается на городе, дальше уже вопрос
+#: ведущего, и в реквизите протокола ему места нет.
+_NOT_A_POSITION = frozenset("""
+вы ты мы он она они вас нас их это эта тут там здесь сейчас пожалуйста добрый
+доброе здравствуйте да нет и а но если что как когда почему прошу просьба
+подскажите доложите слово ваша ваш ваше на с у в за по о об для
+""".split())
+
+#: Длиннее этого должность не бывает, а вот кусок чужой фразы — бывает.
+_POSITION_WORDS_LIMIT = 10
+
+
+def _trim_position(text: str) -> str:
+    """Отрезает от должности то, что должностью уже не является."""
+    kept: list[str] = []
+    for part in (piece.strip() for piece in (text or "").split(",")):
+        words = part.split()
+        if not words or words[0].casefold() in _NOT_A_POSITION:
+            break
+        kept.append(part)
+        if len(" ".join(kept).split()) >= _POSITION_WORDS_LIMIT:
+            break
+    return ", ".join(kept)
+
 
 #: Распространённые русские имена. Нужны, чтобы отличить ФИО от обычного
 #: словосочетания с большой буквы: «Ставка Банка России» — три слова с
@@ -245,7 +271,7 @@ def mentioned_people(text: str) -> list[Person]:
         position = ""
         matched = _POSITION.match(tail)
         if matched:
-            position = matched.group(1).strip().rstrip(",")
+            position = _trim_position(matched.group(1).strip().rstrip(","))
         key = name.casefold()
         # Из нескольких упоминаний оставляем то, где названа должность.
         if key not in found or (position and not found[key].position):
@@ -274,8 +300,59 @@ def suggest_speakers(blocks: Sequence["object"]) -> dict[str, Person]:
         tail = getattr(previous, "text", "")[-300:]
         people = mentioned_people(tail)
         if len(people) == 1 and getattr(previous, "speaker", "") != speaker:
-            guesses[speaker] = people[0]
+            if _handover(tail) or _mentioned_often(people[0].name, blocks):
+                guesses[speaker] = people[0]
     return guesses
+
+
+#: Слова, которыми передают слово. Настоящее представление слышно: «слово
+#: предоставляется», «на связи», «прокомментируйте, пожалуйста». Приветствие
+#: в адрес ведущего — «Иванов Иван Иванович, здравствуйте» — так не звучит.
+_HANDOVER_WORDS = (
+    "слово", "предоставляется", "доложит", "докладывает", "на связи", "с нами",
+    "представит", "прокомментируйте", "пожалуйста", "передаю", "передам",
+    "выступит", "расскажет",
+)
+
+
+def _handover(text: str) -> bool:
+    """Похоже ли это на передачу слова, а не на обращение к говорящему."""
+    lowered = (text or "").lower()
+    return any(word in lowered for word in _HANDOVER_WORDS)
+
+
+#: Сколько раз человека должны назвать, чтобы подписать его именем чужой
+#: голос. Названного единожды — не подписываем.
+ENOUGH_MENTIONS = 2
+
+
+def _mentioned_often(name: str, blocks: Sequence["object"]) -> bool:
+    """Звучало ли это имя на совещании не один раз.
+
+    Правило родилось на живой записи: реплика «Бакшин Влад Кирилл,
+    здравствуйте» — искажённое распознаванием приветствие в адрес
+    председательствующего — подписала его именем, и это имя ушло в тридцать
+    поручений как исполнитель. Названный по-настоящему участник звучит
+    несколько раз: его представляют, ему передают слово, к нему обращаются.
+    Прозвучавший единожды — чаще всего брак распознавания.
+
+    Неопознанный голос честнее голоса с чужой фамилией: ``SPEAKER_02``
+    заставляет вписать имя руками, а чужая фамилия молча уходит в рассылку.
+    """
+    parts = {word.casefold() for word in re.findall(r"\w{4,}", name)}
+    if not parts:
+        return False
+    seen = 0
+    for block in blocks:
+        words = {word.casefold() for word in re.findall(r"\w{4,}", getattr(block, "text", "") or "")}
+        # Двух слов из ФИО достаточно: «Александра Николаевна» — тот же
+        # человек, что «Голованова Александра Николаевна», а одно случайное
+        # совпадение фамилии с обычным словом ещё ничего не значит.
+        if len(parts & words) >= 2:
+            seen += 1
+            if seen >= ENOUGH_MENTIONS:
+                return True
+    return False
 
 
 def merge_suggestions(

@@ -254,7 +254,7 @@ class Transcript:
             # Проверка на None, а не на истинность: реплика, открывающая
             # запись, начинается на нулевой секунде — и без этого она
             # единственная оставалась без отметки времени.
-            stamp = f"[{_timestamp(block.start)}] " if with_time and block.start is not None else ""
+            stamp = f"[{timestamp(block.start)}] " if with_time and block.start is not None else ""
             lines.append(f"{stamp}{block.speaker}: {block.text}")
         return "\n".join(lines)
 
@@ -278,7 +278,7 @@ def _as_seconds(value: object) -> float | None:
         return None
 
 
-def _timestamp(seconds: float | None) -> str:
+def timestamp(seconds: float | None) -> str:
     if seconds is None:
         return "00:00:00"
     total = int(seconds)

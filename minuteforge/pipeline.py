@@ -28,6 +28,7 @@ from .blocks import (
     drop_soundcheck,
     rename_speakers,
 )
+from .checks import suspicious
 from .chunking import split_into_chunks
 from .config import Settings
 from .llm import LLMClient
@@ -371,11 +372,14 @@ def _free_name(path: Path) -> Path:
 
 
 def _text_with_head(transcript: Transcript) -> str:
-    """Стенограмма с шапкой: чем распознано и что при этом уступили."""
+    """Стенограмма с шапкой: чем распознано, что уступили, где приврано."""
     head = []
     if transcript.model:
         head.append(f"# Распознано моделью {transcript.model}")
     head.extend(f"# {note}" for note in transcript.notes)
+    # Подозрительные места — тут же, в шапке, а не отдельным файлом: тот, кто
+    # читает стенограмму, должен наткнуться на них прежде, чем поверит тексту.
+    head.extend(f"# ПРОВЕРИТЬ. {item.as_line()}" for item in suspicious(transcript.blocks))
     body = transcript.as_text(with_time=True)
     return "\n".join([*head, "", body]) if head else body
 

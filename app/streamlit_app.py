@@ -57,6 +57,7 @@ from minuteforge.pipeline import (  # noqa: E402
     save_transcript,
     transcribe_meeting,
 )
+from minuteforge.checks import suspicious  # noqa: E402
 from minuteforge.transcribe import (  # noqa: E402
     MissingToken,
     RecognitionError,
@@ -673,6 +674,18 @@ if transcript.model:
 st.write(summary)
 for note in transcript.notes:
     st.warning(f"Не хватило видеопамяти: {note}. Качество расшифровки будет ниже.")
+doubtful = suspicious(transcript.blocks)
+if doubtful:
+    # Не прячем за галочкой и не выбрасываем: выдумка распознавания читается
+    # как настоящая речь, и попадёт в протокол, если о ней не сказать.
+    st.warning(
+        f"Похоже на выдумку распознавания: {len(doubtful)} мест. "
+        "Сверьте их с записью — там, где модель не разобрала звук, она "
+        "сочиняет гладкий текст, а не молчит."
+    )
+    with st.expander("Что проверить"):
+        for item in doubtful:
+            st.write(item.as_line())
 with st.expander("Стенограмма"):
     st.text(transcript.as_text(with_time=True))
 saved = st.session_state.get("saved_transcript")

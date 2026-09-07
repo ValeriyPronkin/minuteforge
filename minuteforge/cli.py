@@ -25,6 +25,7 @@ from pathlib import Path
 from loguru import logger
 
 from .blocks import Transcript, blocks_from_segments, consolidate
+from .checks import suspicious
 from .config import HF_TOKEN_ENV, Settings
 from .llm import LLMClient
 from .audio import AudioError, ffmpeg_available
@@ -331,6 +332,8 @@ def command_recognize(args: argparse.Namespace) -> int:
         print(f"  ВНИМАНИЕ: не хватило видеопамяти — {note}")
     if transcript.model:
         print(f"Распознано моделью: {transcript.model}")
+    for item in suspicious(transcript.blocks):
+        print(f"  ПРОВЕРИТЬ. {item.as_line()}")
     print(f"Реплик: {len(transcript.blocks)}, говорящих: {len(transcript.speakers)}")
     print(f"Метки: {', '.join(transcript.speakers)}")
     print(f"Стенограмма текстом: {paths['text']}")

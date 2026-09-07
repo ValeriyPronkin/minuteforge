@@ -191,3 +191,18 @@ def test_every_task_carries_its_place_in_the_recording():
 def test_task_without_a_place_shows_a_dash_not_a_crash():
     text = Protocol(tasks=[Task("Подготовить план", "Ким С.А.")]).as_markdown()
     assert "| — |" in text
+
+
+def test_protocol_names_the_model_among_its_details():
+    """Реквизит документа: протокол — пересказ расшифровки, а расшифровки
+    разных моделей отличаются фамилиями и числами."""
+    from minuteforge.blocks import Block, Transcript
+    from minuteforge.protocol import Protocol
+
+    protocol = Protocol(
+        transcript=Transcript([Block("SPEAKER_00", "Начнём.", 0.0, 120.0)], model="large-v3")
+    )
+    document = protocol.as_markdown()
+
+    assert "**Распознано:** модель large-v3" in document
+    assert protocol.fields()["model"] == "large-v3"

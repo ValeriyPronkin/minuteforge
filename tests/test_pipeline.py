@@ -560,3 +560,51 @@ def test_only_this_recording_is_cleaned(tmp_path):
 
     assert clear_cache(cache) == 200
     assert (theirs / "meeting.wav").exists()
+
+
+def test_transcript_says_which_model_recognised_it(tmp_path):
+    """Стенограмма уходит в другое подразделение отдельным файлом.
+
+    Там нет ни лога, ни интерфейса, а medium и large-v3 расходятся именно в
+    фамилиях и цифрах — в том, из-за чего потом спорят.
+    """
+    from minuteforge.blocks import Block, Transcript
+    from minuteforge.pipeline import save_transcript
+
+    transcript = Transcript([Block("SPEAKER_00", "Начнём.", 0.0, 2.0)], model="large-v3")
+    saved = save_transcript(transcript, tmp_path, stem="стенограмма")
+    text = saved["text"].read_text(encoding="utf-8")
+
+    assert text.splitlines()[0] == "# Распознано моделью large-v3"
+    assert "SPEAKER_00: Начнём." in text
+
+
+def test_fallbacks_are_written_next_to_the_model(tmp_path):
+    """Модель поменьше — это другая расшифровка, и сказать об этом надо там же."""
+    from minuteforge.blocks import Block, Transcript
+    from minuteforge.pipeline import save_transcript
+
+    transcript = Transcript(
+        [Block("SPEAKER_00", "Начнём.", 0.0, 2.0)],
+        notes=["модель large-v3 не поместилась, распознано моделью medium"],
+        model="medium",
+    )
+    head = save_transcript(transcript, tmp_path, stem="стенограмма")["text"].read_text(
+        encoding="utf-8"
+    ).splitlines()
+
+    assert head[0] == "# Распознано моделью medium"
+    assert head[1].startswith("# модель large-v3 не поместилась")
+
+
+def test_transcript_without_model_keeps_the_plain_format(tmp_path):
+    """Готовая стенограмма из json не помнит, чем её сделали — и шапки нет."""
+    from minuteforge.blocks import Block, Transcript
+    from minuteforge.pipeline import save_transcript
+
+    transcript = Transcript([Block("SPEAKER_00", "Начнём.", 0.0, 2.0)])
+    text = save_transcript(transcript, tmp_path, stem="стенограмма")["text"].read_text(
+        encoding="utf-8"
+    )
+
+    assert text.startswith("[00:00:00] SPEAKER_00:")

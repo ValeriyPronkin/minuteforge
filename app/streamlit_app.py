@@ -51,6 +51,7 @@ from minuteforge.pipeline import (  # noqa: E402
     clear_cache,
     protocol_from_transcript,
     _free_name,
+    _text_with_head,
     run_dir,
     save,
     save_transcript,
@@ -180,7 +181,16 @@ class Live:
 
 def transcript_from_state() -> Transcript | None:
     segments = st.session_state.get("segments")
-    return Transcript(consolidate(blocks_from_segments(segments))) if segments else None
+    if not segments:
+        return None
+    transcript = Transcript(consolidate(blocks_from_segments(segments)))
+    # Модель и уступки в сегментах не хранятся, а стенограмма пересобирается
+    # из них при каждом действии в интерфейсе. Без этих двух строк отметка
+    # «распознано моделью такой-то» пропадала бы при первом же нажатии
+    # кнопки — а вместе с ней и предупреждение о нехватке видеопамяти.
+    transcript.model = st.session_state.get("asr_model", "")
+    transcript.notes = list(st.session_state.get("notes", []))
+    return transcript
 
 
 # ---------------------------------------------------------------- сайдбар
@@ -553,6 +563,11 @@ st.subheader("Шаг 1. Распознавание")
 
 if ready_segments is not None:
     st.session_state["segments"] = json.load(ready_segments)
+    # Готовая стенограмма приходит без истории: чем её распознали, файл не
+    # помнит. Лучше не показать ничего, чем приписать ей модель из прошлого
+    # разбора, который шёл в этом же окне.
+    st.session_state["asr_model"] = ""
+    st.session_state["notes"] = []
     st.success(f"Загружена готовая стенограмма: {len(st.session_state['segments'])} сегментов.")
 
 if source_path is not None or uploaded is not None:
@@ -621,6 +636,8 @@ if source_path is not None or uploaded is not None:
                 {"speaker": b.speaker, "text": b.text, "start": b.start, "end": b.end}
                 for b in transcript.blocks
             ]
+            st.session_state["asr_model"] = transcript.model
+            st.session_state["notes"] = list(transcript.notes)
             # Кладём сразу в папку: «Загрузки» на этой машине — не то место,
             # откуда стенограмму заберёт другое подразделение.
             st.session_state["stem"] = source.stem
@@ -647,11 +664,14 @@ if transcript is None:
     st.info("Загрузите запись слева или готовую стенограмму в json.")
     st.stop()
 
-st.write(
+summary = (
     f"Реплик: **{len(transcript.blocks)}**, говорящих: **{len(transcript.speakers)}**, "
     f"длительность: **{transcript.duration_min} мин**"
 )
-for note in getattr(transcript, "notes", []):
+if transcript.model:
+    summary += f", модель: **{transcript.model}**"
+st.write(summary)
+for note in transcript.notes:
     st.warning(f"Не хватило видеопамяти: {note}. Качество расшифровки будет ниже.")
 with st.expander("Стенограмма"):
     st.text(transcript.as_text(with_time=True))
@@ -907,7 +927,7 @@ if protocol is not None:
             **full_width(),
         )
         files[1].download_button(
-            "Стенограмма", transcript.as_text(with_time=True).encode("utf-8"),
+            "Стенограмма", _text_with_head(transcript).encode("utf-8"),
             "стенограмма.txt", "text/plain", **full_width(),
         )
         files[2].download_button(

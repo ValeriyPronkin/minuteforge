@@ -329,6 +329,8 @@ def command_recognize(args: argparse.Namespace) -> int:
 
     for note in getattr(transcript, "notes", []):
         print(f"  ВНИМАНИЕ: не хватило видеопамяти — {note}")
+    if transcript.model:
+        print(f"Распознано моделью: {transcript.model}")
     print(f"Реплик: {len(transcript.blocks)}, говорящих: {len(transcript.speakers)}")
     print(f"Метки: {', '.join(transcript.speakers)}")
     print(f"Стенограмма текстом: {paths['text']}")

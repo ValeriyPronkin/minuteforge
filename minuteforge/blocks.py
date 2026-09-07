@@ -209,6 +209,11 @@ class Transcript:
     #: потому что заказанная не поместилась в видеопамять. Пусто — прошло
     #: как заказано.
     notes: list[str] = field(default_factory=list)
+    #: Какой моделью распознано на самом деле. Стенограммы, сделанные medium
+    #: и large-v3, отличаются именами, числами и датами — тем, ради чего
+    #: протокол и составляют. Читающий документ должен видеть, что перед ним,
+    #: не заглядывая в лог: настройка с тех пор могла и поменяться.
+    model: str = ""
 
     @property
     def duration_min(self) -> float:
@@ -246,7 +251,10 @@ class Transcript:
         """Стенограмма как текст: строка на реплику."""
         lines = []
         for block in self.blocks:
-            stamp = f"[{_timestamp(block.start)}] " if with_time and block.start else ""
+            # Проверка на None, а не на истинность: реплика, открывающая
+            # запись, начинается на нулевой секунде — и без этого она
+            # единственная оставалась без отметки времени.
+            stamp = f"[{_timestamp(block.start)}] " if with_time and block.start is not None else ""
             lines.append(f"{stamp}{block.speaker}: {block.text}")
         return "\n".join(lines)
 

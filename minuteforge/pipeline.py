@@ -180,6 +180,7 @@ def transcribe_meeting(
     # поменьше, — другая расшифровка, и знать об этом нужно и в интерфейсе,
     # и в командной строке.
     transcript.notes = list(recognition.fallbacks)
+    transcript.model = recognition.asr_model
     return transcript
 
 
@@ -369,6 +370,16 @@ def _free_name(path: Path) -> Path:
     return path
 
 
+def _text_with_head(transcript: Transcript) -> str:
+    """Стенограмма с шапкой: чем распознано и что при этом уступили."""
+    head = []
+    if transcript.model:
+        head.append(f"# Распознано моделью {transcript.model}")
+    head.extend(f"# {note}" for note in transcript.notes)
+    body = transcript.as_text(with_time=True)
+    return "\n".join([*head, "", body]) if head else body
+
+
 def save_transcript(
     transcript: Transcript,
     out_dir: str | Path,
@@ -387,7 +398,11 @@ def save_transcript(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     text = _free_name(out_dir / f"{stem}.txt")
-    text.write_text(transcript.as_text(with_time=True), encoding="utf-8")
+    # Шапка с моделью — первой строкой файла. Стенограмма уходит в другое
+    # подразделение отдельным файлом, без интерфейса и без лога, и там
+    # должно быть видно, чем она сделана: спор о том, «Ессентуки» или
+    # «Исинтуки» сказал докладчик, решается именно этим.
+    text.write_text(_text_with_head(transcript), encoding="utf-8")
 
     data = _free_name(out_dir / f"{stem}.json")
     data.write_text(

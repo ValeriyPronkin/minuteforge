@@ -94,6 +94,12 @@ class Protocol:
             )
         if self.transcript is not None and self.transcript.duration_min:
             lines.append(f"**Длительность записи:** {self.transcript.duration_min} мин  ")
+        if self.transcript is not None and self.transcript.model:
+            # Реквизит документа наравне с датой и местом: протокол — пересказ
+            # расшифровки, а расшифровки разных моделей отличаются фамилиями и
+            # цифрами. Тот, кто будет с документом спорить, должен знать, по
+            # чему он составлен.
+            lines.append(f"**Распознано:** модель {self.transcript.model}  ")
         lines.append("")
 
         lines.append("## Поручения")
@@ -135,6 +141,7 @@ class Protocol:
             "attendees": "\n".join(f"{i}. {a}" for i, a in enumerate(self.attendees_full, 1)),
             "attendees_line": ", ".join(self.named_attendees),
             "duration": f"{self.transcript.duration_min} мин" if self.transcript else "",
+            "model": self.transcript.model if self.transcript else "",
             "tasks": "\n".join(_task_lines(self.actionable)),
             "unclear": "\n".join(f"- {t.what}" for t in self.needs_clarification),
             "tasks_table": "\n".join(_task_table(self.actionable)),

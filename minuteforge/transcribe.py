@@ -438,6 +438,67 @@ def _share_after(key: str) -> float:
     return round(min(1.0, _share_before(key) + STEP_SHARES.get(key, 0.0)), 3)
 
 
+#: Сколько знаков должно быть в сегменте, чтобы его можно было выровнять.
+#: Выравнивание идёт по переходам между соседними символами: WhisperX строит
+#: решётку, где каждый шаг — «остаться на этом символе или перейти к
+#: следующему». В сегменте из одного знака следующего символа нет, список
+#: переходов оказывается пустым, torch считает пустой список вещественным и
+#: отказывается индексировать им — с сообщением «tensors used as indices must
+#: be long, int, byte or bool tensors». Whisper такие сегменты выдаёт
+#: постоянно: «А», «И», «—» — междометия и обрывки на паузах. Один такой
+#: сегмент в часовой записи ронял весь разбор на последнем шаге.
+MIN_ALIGNABLE_CHARS = 2
+
+
+def is_alignable(segment: dict) -> bool:
+    """Можно ли выравнивать этот сегмент, не роняя WhisperX."""
+    return len(str(segment.get("text") or "").strip()) >= MIN_ALIGNABLE_CHARS
+
+
+def _unaligned(segment: dict) -> dict:
+    """Сегмент в том виде, в каком его отдаёт WhisperX, когда выровнять не смог.
+
+    Времена остаются от распознавания — секунда-другая неточности. Выбросить
+    такой сегмент было бы хуже: «Да» и «Нет» в ответ на вопрос — это решение
+    совещания, и оно должно остаться в стенограмме.
+    """
+    return {
+        "text": segment.get("text", ""),
+        "start": segment.get("start"),
+        "end": segment.get("end"),
+        "words": [],
+    }
+
+
+def align_alignable(segments: Sequence[dict], align: Callable[[list[dict]], dict]) -> dict:
+    """Выравнивает всё, кроме сегментов, на которых WhisperX падает.
+
+    Короткие сегменты изымаются перед вызовом и возвращаются на своё место по
+    времени начала — с временами от распознавания. Порядок сегментов важен:
+    из них потом собираются реплики, а реплика, приехавшая не туда, меняет
+    смысл разговора.
+
+    :param align: чем выравнивать. Вынесено параметром, чтобы разбор
+        проверялся без видеокарты и без моделей.
+    """
+    short = [s for s in segments if not is_alignable(s)]
+    if not short:
+        return align(list(segments))
+
+    logger.info(
+        "Выравниваю без {} коротких сегментов из {}: WhisperX на них падает",
+        len(short), len(segments),
+    )
+    rest = [s for s in segments if is_alignable(s)]
+    aligned = align(rest) if rest else {"segments": [], "word_segments": []}
+
+    merged = list(aligned.get("segments", [])) + [_unaligned(s) for s in short]
+    # Сортировка устойчивая: при совпадении времён выровненный сегмент
+    # остаётся впереди возвращённого.
+    merged.sort(key=lambda s: (s.get("start") is None, s.get("start") or 0.0))
+    return {**aligned, "segments": merged}
+
+
 def _cuda_available() -> bool:
     try:
         import torch
@@ -481,8 +542,11 @@ class _WhisperX:  # pragma: no cover — требует моделей и вид
         model, metadata = whisperx.load_align_model(language_code=language, device=device)
         sound = whisperx.load_audio(audio)
         try:
-            return whisperx.align(
-                segments, model, metadata, sound, device, return_char_alignments=False
+            return align_alignable(
+                segments,
+                lambda batch: whisperx.align(
+                    batch, model, metadata, sound, device, return_char_alignments=False
+                ),
             )
         finally:
             del model, metadata

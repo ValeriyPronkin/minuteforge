@@ -417,3 +417,53 @@ def test_apple_gpu_takes_the_torch_stages_only():
     assert torch_device("cpu", mps_available=True) == "mps"
     assert torch_device("cpu", mps_available=False) == "cpu"
     assert torch_device("cuda", mps_available=True) == "cuda"
+
+
+def test_one_letter_segments_do_not_reach_alignment():
+    """Односимвольный сегмент ронял весь разбор на последнем шаге.
+
+    WhisperX выравнивает по переходам между соседними символами, а в сегменте
+    из одного знака соседа нет: torch получает пустой список индексов и
+    отказывается работать («tensors used as indices must be long...»). Такие
+    сегменты Whisper выдаёт постоянно — «А», «И», «—» на паузах.
+    """
+    from minuteforge.transcribe import align_alignable
+
+    segments = [
+        {"text": "Начнём.", "start": 0.0, "end": 2.0},
+        {"text": "А", "start": 2.0, "end": 2.3},
+        {"text": "Записываю.", "start": 2.3, "end": 4.0},
+    ]
+    seen = []
+
+    def align(batch):
+        seen.append([s["text"] for s in batch])
+        return {"segments": [dict(s, words=[{"word": s["text"]}]) for s in batch]}
+
+    result = align_alignable(segments, align)
+
+    assert seen == [["Начнём.", "Записываю."]]
+    assert [s["text"] for s in result["segments"]] == ["Начнём.", "А", "Записываю."]
+
+
+def test_short_segment_keeps_its_text_and_time():
+    """Выбросить его нельзя: «Да» в ответ на вопрос — это решение совещания."""
+    from minuteforge.transcribe import align_alignable
+
+    result = align_alignable(
+        [{"text": "?", "start": 5.0, "end": 5.4}],
+        lambda batch: pytest.fail("выравнивать нечего, а вызов был"),
+    )
+
+    assert result["segments"] == [{"text": "?", "start": 5.0, "end": 5.4, "words": []}]
+
+
+def test_alignment_gets_everything_when_nothing_is_short():
+    """Обычная запись не должна ничего терять и делиться на части."""
+    from minuteforge.transcribe import align_alignable
+
+    segments = [{"text": "Начнём.", "start": 0.0, "end": 2.0}]
+    result = align_alignable(segments, lambda batch: {"segments": batch, "word_segments": []})
+
+    assert result["segments"] == segments
+    assert "word_segments" in result

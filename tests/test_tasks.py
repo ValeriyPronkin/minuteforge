@@ -410,15 +410,36 @@ def test_state_in_the_due_field_is_cleared():
     assert clean_due("до конца следующей недели") == "до конца следующей недели"
 
 
-def test_greeting_is_not_an_assignee():
-    """Поручение «уважаемым коллегам» разослать некому, а в графе контроля
-    оно выглядит назначенным."""
+def test_an_address_to_the_room_names_the_executor():
+    """На штабе, где собраны все субъекты, «прошу регионы обратить внимание»
+    — поручение всем регионам, а не поручение в никуда: его рассылают и по
+    нему спрашивают. А вот «мы» — местоимение без того, к кому относится.
+
+    Написание приводится к одному, иначе «регионам», «регионы» и «субъектам»
+    разъедутся по таблице как три разных исполнителя.
+    """
     from minuteforge.tasks import clean_assignee
 
     corpus = "Уважаемые коллеги, мы начинаем. Ким С.А., подготовьте справку."
-    assert clean_assignee("Уважаемые коллеги", corpus) == ""
+    assert clean_assignee("Уважаемые коллеги", corpus) == "все участники"
+    assert clean_assignee("регионам", corpus) == "все регионы"
+    assert clean_assignee("Субъектам", corpus) == "все регионы"
     assert clean_assignee("Мы", corpus) == ""
     assert clean_assignee("Ким С.А.", corpus) == "Ким С.А."
+
+
+def test_a_collective_executor_needs_no_name_nearby():
+    """Проверка «названа ли фамилия рядом» к «всем регионам» неприменима:
+    их не называют, к ним обращаются."""
+    from minuteforge.blocks import Block
+    from minuteforge.chunking import Chunk
+    from minuteforge.tasks import Task, attach_source
+
+    blocks = [Block("SPEAKER_02", "Я также прошу регионы обратить на это особое внимание.", 0, 20)]
+    chunk = Chunk(blocks, index=1, total=1)
+
+    attached = attach_source([Task(what="Обратить особое внимание", who="все регионы")], chunk)
+    assert attached[0].who == "все регионы"
 
 
 # ------------------------------------------- свои указания модели

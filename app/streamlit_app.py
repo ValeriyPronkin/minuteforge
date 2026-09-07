@@ -57,6 +57,7 @@ from minuteforge.pipeline import (  # noqa: E402
     save_transcript,
     transcribe_meeting,
 )
+from minuteforge import LOADED_REVISION, disk_revision  # noqa: E402
 from minuteforge.checks import suspicious  # noqa: E402
 from minuteforge.transcribe import (  # noqa: E402
     MissingToken,
@@ -514,30 +515,20 @@ st.title(BASE.app_title)
 st.caption("Протокол видеосовещания с поручениями. Ничего не уходит с этой машины.")
 
 
-def running_version() -> str:
-    """Какая версия сейчас в памяти.
+st.caption(f"Версия в памяти: {LOADED_REVISION or 'версия неизвестна'}")
 
-    Streamlit перезапускает сценарий, но уже загруженные модули не
-    перечитывает: после обновления приложение может работать старым кодом, и
-    со стороны это выглядит как «изменения не появились». Строка внизу
-    отвечает на этот вопрос сразу.
-    """
-    import subprocess
-
-    try:
-        out = subprocess.run(
-            ["git", "-C", str(ROOT), "log", "-1", "--format=%h %s"],
-            capture_output=True, timeout=3,
-        )
-        # Байты, а не text=True: git отдаёт UTF-8, а Python на Windows
-        # декодирует по локали — русский заголовок коммита превращается в
-        # кракозябры.
-        return out.stdout.decode("utf-8", "replace").strip() or "версия неизвестна"
-    except Exception:
-        return "версия неизвестна"
-
-
-st.caption(f"Версия в памяти: {running_version()}")
+# Сам сценарий Streamlit перечитывает на каждое действие, а вот загруженные
+# модули — нет. После git pull без перезапуска половина кода остаётся старой,
+# и выглядит это как «правки не появились»: интерфейс уже новый, расчёт ещё
+# старый. Читать версию из репозитория «сейчас» здесь бесполезно — она
+# покажет то, что лежит на диске, а не то, что считает.
+_on_disk = disk_revision()
+if _on_disk and LOADED_REVISION and _on_disk != LOADED_REVISION:
+    st.warning(
+        f"Обновление подтянуто, но работает старый код. "
+        f"В памяти: {LOADED_REVISION}. На диске: {_on_disk}. "
+        "Остановите приложение и запустите заново — перезагрузки страницы мало."
+    )
 
 with st.expander("Как это работает"):
     st.markdown(

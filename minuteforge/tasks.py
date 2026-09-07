@@ -408,6 +408,52 @@ _IMPERATIVE_TAIL = "йте"
 #: Прошедшее время сразу за словом требования переводит его в упрёк.
 _PAST = frozenset("был была были было".split())
 
+#: Слова, с которых начинается рассуждение, а не поручение.
+_IF = frozenset("если когда раз".split())
+
+#: Чем рассуждение открывается на слух: «Ну если надо…», «Вот если надо…».
+_FILLER = frozenset("ну и а вот но да так значит поэтому".split())
+
+#: Требования, которые внутри «если» ничего не поручают: «Если надо собрать
+#: всех участников — значит, это надо делать» сказано о работе вообще, а не
+#: кому-то и не к сроку. Настоящее поручение внутри условия звучит иначе —
+#: «если будут вопросы, прошу доложить», — и «прошу» его выдаёт.
+_WEAK_INSIDE_IF = frozenset("надо нужно необходимо должен должна должны должно".split())
+
+#: Ведение совещания: перейти к вопросу, заслушать регион, дать слово. Это
+#: распорядок, а не работа, и в таблице контроля ему делать нечего.
+_AGENDA_VERBS = frozenset("""
+рассмотреть рассмотрению перейти переходим заслушать заслушивать послушать
+вызывать вызвать доложить
+""".split())
+
+
+def _conditional(words: list[str]) -> bool:
+    """Рассуждение «если надо — значит, надо делать», а не поручение."""
+    head = [word for word in words[:3] if word not in _FILLER]
+    if not head or head[0] not in _IF:
+        return False
+    return not any(
+        word in DIRECTIVE_WORDS and word not in _WEAK_INSIDE_IF for word in words
+    )
+
+
+def _agenda(words: list[str]) -> bool:
+    """Распорядок совещания: «предлагается рассмотреть», «предлагаю перейти».
+
+    Слово «предлагаю» одинаково открывает и распорядок, и настоящее
+    поручение, поэтому одного его мало. Отличает второе требование рядом:
+    «предлагаю перейти к вопросу и прошу подготовить справку» — поручение, а
+    «предлагается рассмотреть Пермский край» — повестка.
+    """
+    if not any(word.startswith("предлага") for word in words):
+        return False
+    if not set(words) & _AGENDA_VERBS:
+        return False
+    return not any(
+        word in DIRECTIVE_WORDS and not word.startswith("предлага") for word in words
+    )
+
 
 def is_directive(sentence: str) -> bool:
     """Поручают ли этой фразой — или просто рассказывают.
@@ -423,6 +469,8 @@ def is_directive(sentence: str) -> bool:
     реплике: есть слово требования или глагол в повелительном наклонении.
     """
     words = re.findall(r"\w+", (sentence or "").lower())
+    if _conditional(words) or _agenda(words):
+        return False
     for position, word in enumerate(words):
         if word not in DIRECTIVE_WORDS:
             continue
@@ -447,7 +495,7 @@ def keep_directives(tasks: Iterable[Task]) -> list[Task]:
 #: чтобы считаться одним. Порог ниже, чем у :data:`SAME_TASK`: там сравнение
 #: идёт между разными местами записи, здесь — внутри одной фразы, и
 #: случайно совпасть им негде.
-SAME_PLACE = 0.5
+SAME_PLACE = 0.4
 
 
 def one_per_place(tasks: Sequence[Task]) -> list[Task]:
@@ -463,7 +511,7 @@ def one_per_place(tasks: Sequence[Task]) -> list[Task]:
     поручение сформулировано подробнее.
     """
     kept: list[Task] = []
-    for task in tasks:
+    for task in _without_scraps(tasks):
         words = _significant(task.what)
         twin = None
         for other in kept:
@@ -478,6 +526,35 @@ def one_per_place(tasks: Sequence[Task]) -> list[Task]:
             continue
         if _fuller(task, twin):
             kept[kept.index(twin)] = task
+    return kept
+
+
+#: Короче этого поручение не живёт своей жизнью: одно значащее слово рядом с
+#: полным пунктом из той же фразы — обломок, а не поручение.
+#:
+#: Порог намеренно низкий. В одной фразе поручений бывает три — «обновлять
+#: контейнерный парк, завершать создание площадок и обеспечивать вывоз», — и
+#: короткое третье ничем не хуже длинного первого. Лишний пункт вычеркнут
+#: при вычитке, потерянный не восстановит никто.
+SCRAP_WORDS = 1
+
+
+def _without_scraps(tasks: Sequence[Task]) -> list[Task]:
+    """Выбрасывает обрывки, если из той же реплики выписано что-то полнее."""
+    kept = []
+    for task in tasks:
+        if len(_significant(task.what)) > SCRAP_WORDS:
+            kept.append(task)
+            continue
+        fuller_nearby = any(
+            other is not task
+            and other.quote
+            and _normalize(other.quote) == _normalize(task.quote)
+            and len(_significant(other.what)) > SCRAP_WORDS
+            for other in tasks
+        )
+        if not fuller_nearby:
+            kept.append(task)
     return kept
 
 

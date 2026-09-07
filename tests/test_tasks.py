@@ -816,3 +816,51 @@ def test_different_replies_keep_their_own_orders():
     ])
 
     assert len(kept) == 2
+
+
+def test_reasoning_about_work_is_not_an_order():
+    """«Если надо собрать всех участников — значит, это надо делать» сказано
+    о работе вообще: ни кому, ни к какому сроку."""
+    from minuteforge.tasks import is_directive
+
+    assert not is_directive("Если надо собрать всех участников и держать на контроле, значит, это надо делать.")
+    assert not is_directive("Ну если надо усилить контроль за проектировщиками, эту работу надо сделать.")
+    assert is_directive("Если будут вопросы, прошу доложить отдельно."), "внутри условия бывает и поручение"
+
+
+def test_the_agenda_is_not_an_order():
+    """Распорядок совещания — не работа: «предлагается рассмотреть Пермский
+    край» это следующий пункт повестки, а не поручение кому-то."""
+    from minuteforge.tasks import is_directive
+
+    assert not is_directive("Как раз предлагается рассмотреть Пермский край и Красноярский край.")
+    assert not is_directive("Предлагаем коллег не заслушивать, они всё оперативно отработают.")
+    assert is_directive("Предлагаю направить письмо в министерство с уточнённой цифрой.")
+    assert is_directive("Предлагаю перейти к следующему вопросу и прошу подготовить справку.")
+
+
+def test_a_one_word_scrap_yields_to_the_full_order():
+    """«Передать» рядом с полным пунктом из той же фразы — обломок разбора."""
+    from minuteforge.tasks import Task, one_per_place
+
+    quote = "Поэтому передайте разговор, все фотографии отправьте губернатору."
+    kept = one_per_place([
+        Task(what="Передать", quote=quote),
+        Task(what="Отправить фотографии губернатору", quote=quote),
+    ])
+
+    assert [task.what for task in kept] == ["Отправить фотографии губернатору"]
+
+
+def test_three_orders_in_one_sentence_stay_three():
+    """В одной фразе поручений бывает три, и короткое ничем не хуже длинного."""
+    from minuteforge.tasks import Task, one_per_place
+
+    quote = "Необходимо обновлять контейнерный парк, завершать создание площадок и обеспечивать вывоз КГО."
+    kept = one_per_place([
+        Task(what="Обновлять контейнерный парк", quote=quote),
+        Task(what="Завершить создание площадок", quote=quote),
+        Task(what="Обеспечивать вывоз КГО", quote=quote),
+    ])
+
+    assert len(kept) == 3

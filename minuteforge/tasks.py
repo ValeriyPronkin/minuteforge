@@ -717,6 +717,27 @@ def worth_showing(sentence: str) -> bool:
     return is_directive(sentence)
 
 
+#: Сколько значащих слов должно быть в поручении. Одного не бывает:
+#: «Подтвердить» — это не задание, а обломок фразы «Просьба подтвердить».
+#: Что подтвердить, кому и к какому сроку — в таком пункте не сказано, и в
+#: таблице контроля с него нечего спросить.
+MEANINGFUL_WORDS = 2
+
+
+def keep_meaningful(tasks: Iterable[Task]) -> list[Task]:
+    """Выбрасывает поручения из одного слова.
+
+    Мелкая модель, увидев «Просьба подтверждить» без продолжения, честно
+    выписывает «Подтвердить» — и формально она права, поручение прозвучало.
+    Но пункт из одного слова нельзя ни разослать, ни проверить: глагол без
+    предмета не задание.
+    """
+    return [
+        task for task in tasks
+        if len(re.findall(r"\w{3,}", task.what or "")) >= MEANINGFUL_WORDS
+    ]
+
+
 def keep_directives(tasks: Iterable[Task]) -> list[Task]:
     """Оставляет поручения, которые слышны в реплике-источнике.
 
@@ -917,7 +938,12 @@ def extract_tasks(
             share=position / total,
         ))
 
-    merged = dedupe(collected)
+    whole = dedupe(collected)
+    merged = keep_meaningful(whole)
+    if len(merged) != len(whole):
+        logger.info(
+            "Отсеяно как обломок из одного слова: {}", len(whole) - len(merged)
+        )
     heard = keep_directives(merged)
     if len(heard) != len(merged):
         # Счёт в журнал: отсев молчком выглядит так, будто модель ничего не

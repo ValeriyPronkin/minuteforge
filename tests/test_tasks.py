@@ -1048,3 +1048,21 @@ def test_a_silent_server_does_not_cost_an_order():
 
     tasks = [Task(what="Подготовить справку", quote="Подготовьте.", context="Подготовьте.")]
     assert verify(tasks, Silent()) == tasks
+
+
+def test_a_one_word_order_is_not_an_order():
+    """«Подтвердить» — обломок фразы «Просьба подтверждить», а не задание.
+
+    Глагол без предмета нельзя ни разослать, ни проверить: что
+    подтвердить, кому и к какому сроку — в таком пункте не сказано.
+    """
+    from minuteforge.tasks import Task, keep_meaningful
+
+    kept = keep_meaningful([
+        Task(what="Подтвердить"),
+        Task(what="Подтвердить финансирование"),
+        Task(what="Организовать фотоотчет"),
+        Task(what="Доложить"),
+    ])
+
+    assert [t.what for t in kept] == ["Подтвердить финансирование", "Организовать фотоотчет"]

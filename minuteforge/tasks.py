@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from difflib import SequenceMatcher
 from pathlib import Path
 from dataclasses import dataclass, replace
 from typing import Iterable, Sequence
@@ -524,11 +525,74 @@ def _without_filler(sentence: str) -> str:
     return " ".join(words)
 
 
-def with_addressee(tasks: Sequence[Task]) -> list[Task]:
+#: Насколько должны совпасть имя и отчество, чтобы это был один человек.
+#: Пороги разные и считаются порознь — целиком строки сравнивать нельзя:
+#: «Андрей Николаевич» и «Антон Николаевич» совпадают на 0,79, а «Джамбулат
+#: Хизирович» и «Шамбулат Кириллович» — на 0,74, хотя первые двое разные
+#: люди, а вторые один и тот же, услышанный дважды по-разному. Различает их
+#: имя: 0,36 против 0,82.
+SAME_GIVEN_NAME = 0.7
+SAME_PATRONYMIC = 0.6
+
+
+def same_person(one: str, other: str) -> bool:
+    """Один ли это человек, названный дважды по-разному.
+
+    Распознавание коверкает имена так, что один ведущий приезжает четырьмя
+    людьми: «Джамбулат Хизирович», «Жабулат Хизирович», «Шамбулат
+    Кириллович», «Джамбулат Кизирович». Считать их разными — значит не
+    узнать ведущего ни в одном из написаний.
+    """
+    left, right = (one or "").lower().split(), (other or "").lower().split()
+    if not left or not right:
+        return False
+    if len(left) < 2 or len(right) < 2:
+        return SequenceMatcher(None, " ".join(left), " ".join(right)).ratio() >= 0.85
+    return (
+        SequenceMatcher(None, left[0], right[0]).ratio() >= SAME_GIVEN_NAME
+        and SequenceMatcher(None, left[1], right[1]).ratio() >= SAME_PATRONYMIC
+    )
+
+
+#: Сколько раз должны обратиться к человеку, чтобы счесть его ведущим.
+#: Ведущего окликают весь штаб — «Джамбулат Хизирович, разрешите», — а
+#: случайное обращение звучит один раз.
+CHAIR_MENTIONS = 3
+
+
+def most_addressed(blocks: Sequence[object]) -> str:
+    """К кому обращаются чаще всех — тот и ведёт совещание.
+
+    Нужно, чтобы не записать его в исполнители. Докладчик начинает свою
+    речь обращением к ведущему — «Жабулат Хизирович, ранее отмечали…», — а
+    поручение внутри этой же реплики адресовано вовсе не ему. В протоколе
+    выходило, что ведущий поручил работу сам себе.
+    """
+    counted: dict[str, int] = {}
+    for block in blocks:
+        for sentence in _sentences(getattr(block, "text", "") or ""):
+            name = addressee(sentence)
+            # Обращение к залу ведущим не бывает.
+            if not name or name in COLLECTIVE_NAMES:
+                continue
+            # Написания сводятся: иначе четыре версии одного имени наберут
+            # по одному упоминанию и ведущего не опознает никто.
+            same = next((known for known in counted if same_person(known, name)), name)
+            counted[same] = counted.get(same, 0) + 1
+    if not counted:
+        return ""
+    name, times = max(counted.items(), key=lambda item: item[1])
+    return name if times >= CHAIR_MENTIONS else ""
+
+
+def with_addressee(tasks: Sequence[Task], *, chair: str = "") -> list[Task]:
     """Дописывает исполнителя из обращения там, где модель его не назвала.
 
     Своё модель не переписывает: сказанное ею проверено по стенограмме и
     точнее — она видит всю фразу, а правило только её начало.
+
+    :param chair: кто ведёт совещание. Ему поручений не дают: обращение к
+        нему открывает доклад, а не поручение.
     """
     filled = []
     for task in tasks:
@@ -538,6 +602,8 @@ def with_addressee(tasks: Sequence[Task]) -> list[Task]:
         # Ищем и в цитате, и в куске: обращение бывает фразой раньше —
         # «Коллеги Ростовской области. Просьба подтвердить срок ввода».
         found = addressee(task.quote) or addressee(task.context)
+        if found and chair and same_person(found, chair):
+            found = ""
         filled.append(replace(task, who=found) if found else task)
     return filled
 
@@ -834,6 +900,7 @@ def extract_tasks(
     progress: Progress | None = None,
     answers: list[str] | None = None,
     corpus: str | None = None,
+    chair: str = "",
 ) -> list[Task]:
     """Проходит по кускам стенограммы и собирает поручения.
 
@@ -961,7 +1028,7 @@ def extract_tasks(
     single = one_per_place(heard)
     if len(single) != len(heard):
         logger.info("Склеено по месту разговора: {}", len(heard) - len(single))
-    named = with_addressee(single)
+    named = with_addressee(single, chair=chair)
     added = sum(1 for was, now in zip(single, named) if not was.who and now.who)
     if added:
         logger.info("Исполнитель взят из обращения: {} поручений", added)

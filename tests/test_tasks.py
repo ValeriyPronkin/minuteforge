@@ -1066,3 +1066,55 @@ def test_a_one_word_order_is_not_an_order():
     ])
 
     assert [t.what for t in kept] == ["Подтвердить финансирование", "Организовать фотоотчет"]
+
+
+def test_the_chair_is_not_given_orders():
+    """Докладчик открывает речь обращением к ведущему.
+
+    «Жабулат Хизирович, ранее отмечали… Предлагаю уточнить у региона, кто
+    отвечает за площадки» — поручение здесь региону, а в протоколе стоял
+    исполнителем ведущий.
+    """
+    from minuteforge.blocks import Block
+    from minuteforge.tasks import Task, most_addressed, with_addressee
+
+    blocks = [
+        Block("SPEAKER_12", "Джамбулат Хизирович, разрешите доложить.", 0, 10),
+        Block("SPEAKER_08", "Джамбулат Хизирович, объект готов на 84%.", 10, 20),
+        Block("SPEAKER_11", "Джамбулат Хизирович, если позволите.", 20, 30),
+    ]
+    chair = most_addressed(blocks)
+    assert chair == "Джамбулат Хизирович"
+
+    task = Task(
+        what="Уточнить, кто отвечает за площадки",
+        quote="Джамбулат Хизирович, предлагаю уточнить у региона.",
+    )
+    assert with_addressee([task], chair=chair)[0].who == ""
+    assert with_addressee([task])[0].who == "Джамбулат Хизирович", (
+        "без ведущего правило работает как прежде"
+    )
+
+
+def test_a_single_greeting_does_not_make_a_chair():
+    """К ведущему обращаются весь штаб, а случайное обращение звучит раз."""
+    from minuteforge.blocks import Block
+    from minuteforge.tasks import most_addressed
+
+    assert most_addressed([Block("S1", "Иван Петрович, доложите.", 0, 5)]) == ""
+
+
+def test_one_chair_heard_four_ways_is_one_person():
+    """Распознавание коверкает имя, и ведущий приезжает четырьмя людьми.
+
+    Сравнивать строки целиком нельзя: «Андрей Николаевич» и «Антон
+    Николаевич» похожи сильнее, чем «Джамбулат Хизирович» и «Шамбулат
+    Кириллович», — а первые двое разные люди. Различает их имя, не отчество.
+    """
+    from minuteforge.tasks import same_person
+
+    assert same_person("Джамбулат Хизирович", "Шамбулат Кириллович")
+    assert same_person("Джамбулат Хизирович", "Жабулат Хизирович")
+    assert same_person("Эмир Нурдинович", "Эмир Нурденович")
+    assert not same_person("Андрей Николаевич", "Антон Николаевич")
+    assert not same_person("Андрей Николаевич", "Анатолий Николаевич")

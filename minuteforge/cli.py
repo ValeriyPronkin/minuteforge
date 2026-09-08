@@ -175,10 +175,15 @@ def load_transcript(path: Path) -> Transcript:
     """Читает стенограмму, сохранённую распознаванием или интерфейсом."""
     if not path.exists():
         raise FileNotFoundError(f"Файл стенограммы не найден: {path}")
-    segments = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(segments, dict):  # на случай, если сохранили целиком результат
-        segments = segments.get("segments", [])
-    return Transcript(consolidate(blocks_from_segments(segments)))
+    body = json.loads(path.read_text(encoding="utf-8"))
+    # Голый список — стенограмма прежних версий, и такие файлы никуда не
+    # делись. Словарь — наш нынешний вид, с историей распознавания.
+    segments = body.get("segments", []) if isinstance(body, dict) else body
+    transcript = Transcript(consolidate(blocks_from_segments(segments)))
+    if isinstance(body, dict):
+        transcript.model = str(body.get("model") or "")
+        transcript.notes = [str(note) for note in body.get("notes") or []]
+    return transcript
 
 
 def describe_environment() -> list[tuple[bool, str]]:

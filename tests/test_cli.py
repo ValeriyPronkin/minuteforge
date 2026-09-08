@@ -290,3 +290,44 @@ def test_check_returns_nonzero_when_something_is_missing(monkeypatch, capsys):
     monkeypatch.setattr("minuteforge.cli.LLMClient", Client)
     assert main(["check"]) == 1
     assert "нет ffmpeg" in capsys.readouterr().out
+
+
+def test_the_transcript_remembers_what_recognised_it(tmp_path):
+    """Модель распознавания переживает сохранение в json.
+
+    Протокол пересобирают из готовой стенограммы, не распознавая заново, — и
+    на этом пути реквизит «Распознано моделью» терялся: документ выходил без
+    строки, которой решается спор, «Ессентуки» или «Исинтуки» сказал
+    докладчик.
+    """
+    from minuteforge.blocks import Block, Transcript
+    from minuteforge.cli import load_transcript
+    from minuteforge.pipeline import save_transcript
+
+    transcript = Transcript([Block("SPEAKER_00", "Начинаем.", 0, 5)])
+    transcript.model = "large-v3"
+    transcript.notes = ["модель уменьшена: не хватило видеопамяти"]
+
+    paths = save_transcript(transcript, tmp_path, stem="стенограмма")
+    restored = load_transcript(paths["json"])
+
+    assert restored.model == "large-v3"
+    assert restored.notes == ["модель уменьшена: не хватило видеопамяти"]
+    assert [b.text for b in restored.blocks] == ["Начинаем."]
+
+
+def test_a_transcript_from_an_older_version_still_reads(tmp_path):
+    """Голый список реплик — файлы прежних версий, и они никуда не делись."""
+    import json
+
+    from minuteforge.cli import load_transcript
+
+    path = tmp_path / "старая.json"
+    path.write_text(
+        json.dumps([{"speaker": "SPEAKER_00", "text": "Начинаем.", "start": 0, "end": 5}]),
+        encoding="utf-8",
+    )
+    restored = load_transcript(path)
+
+    assert [b.text for b in restored.blocks] == ["Начинаем."]
+    assert restored.model == ""

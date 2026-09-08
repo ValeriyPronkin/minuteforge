@@ -35,7 +35,13 @@ from .llm import LLMClient
 from .people import Person
 from . import regions
 from .protocol import Protocol, build_protocol
-from .tasks import asks_for_work, extract_tasks, worth_showing
+from .tasks import (
+    COLLECTIVE_NAMES,
+    asks_for_work,
+    extract_tasks,
+    most_addressed,
+    worth_showing,
+)
 from .transcribe import (
     STEP_TITLES,
     RecognitionError,
@@ -248,16 +254,28 @@ def protocol_from_transcript(
     warm_up(client, progress)
 
     answers: list[str] = []
+    # Ведущий — тот, к кому обращаются чаще всех. Поручений ему не дают:
+    # обращением к нему докладчик открывает свою речь.
+    chair = most_addressed(for_model)
+    if chair:
+        logger.info("Совещание ведёт {} — в исполнители не пойдёт", chair)
     tasks = extract_tasks(
         chunks, client, progress=progress, answers=answers,
-        corpus=named.as_text(),
+        corpus=named.as_text(), chair=chair,
     )
     logger.info("Найдено поручений: {}", len(tasks))
 
     # Чей вопрос разбирали. Считается по всей стенограмме, а не по окну:
     # регион объявляют один раз, а поручают потом четверть часа.
     marks = regions.follow(for_model)
-    tasks = [replace(task, region=regions.at(marks, task.at)) for task in tasks]
+    # Поручению, данному всему залу, регион не приписывается: «обращайтесь
+    # в ППК — все регионы — Пермский край» сужает адресата до одного
+    # субъекта, хотя сказано было всем.
+    tasks = [
+        task if task.who in COLLECTIVE_NAMES
+        else replace(task, region=regions.at(marks, task.at))
+        for task in tasks
+    ]
     with_region = sum(1 for task in tasks if task.region)
     logger.info(
         "Разбор шёл по {} регионам, у {} поручений регион определён",
@@ -448,12 +466,21 @@ def save_transcript(
     text.write_text(_text_with_head(transcript, marks), encoding="utf-8")
 
     data = _free_name(out_dir / f"{stem}.json")
+    # Не голый список реплик, а список с историей: чем распознано и на что
+    # пришлось пойти. Из этого файла потом пересобирают протокол, не
+    # распознавая заново, — и на этом пути терялась строка «Распознано
+    # моделью». Документ выходил без реквизита, которым решается спор,
+    # «Ессентуки» или «Исинтуки» сказал докладчик.
     data.write_text(
         json.dumps(
-            [
-                {"speaker": b.speaker, "text": b.text, "start": b.start, "end": b.end}
-                for b in transcript.blocks
-            ],
+            {
+                "model": transcript.model,
+                "notes": list(transcript.notes),
+                "segments": [
+                    {"speaker": b.speaker, "text": b.text, "start": b.start, "end": b.end}
+                    for b in transcript.blocks
+                ],
+            },
             ensure_ascii=False,
             indent=2,
         ),

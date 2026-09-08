@@ -554,12 +554,16 @@ with st.expander("Как это работает"):
 st.subheader("Шаг 1. Распознавание")
 
 if ready_segments is not None:
-    st.session_state["segments"] = json.load(ready_segments)
-    # Готовая стенограмма приходит без истории: чем её распознали, файл не
-    # помнит. Лучше не показать ничего, чем приписать ей модель из прошлого
-    # разбора, который шёл в этом же окне.
-    st.session_state["asr_model"] = ""
-    st.session_state["notes"] = []
+    loaded = json.load(ready_segments)
+    # Наши файлы помнят, чем распознаны; сохранённые прежними версиями —
+    # голый список реплик, и тогда история неизвестна. Пусто лучше, чем
+    # модель из прошлого разбора, который шёл в этом же окне.
+    known = isinstance(loaded, dict)
+    st.session_state["segments"] = loaded.get("segments", []) if known else loaded
+    st.session_state["asr_model"] = str(loaded.get("model") or "") if known else ""
+    st.session_state["notes"] = (
+        [str(note) for note in loaded.get("notes") or []] if known else []
+    )
     st.success(f"Загружена готовая стенограмма: {len(st.session_state['segments'])} сегментов.")
 
 if source_path is not None or uploaded is not None:

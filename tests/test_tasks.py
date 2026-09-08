@@ -1118,3 +1118,48 @@ def test_one_chair_heard_four_ways_is_one_person():
     assert same_person("Эмир Нурдинович", "Эмир Нурденович")
     assert not same_person("Андрей Николаевич", "Антон Николаевич")
     assert not same_person("Андрей Николаевич", "Анатолий Николаевич")
+
+
+def test_the_deadline_is_taken_from_the_phrase():
+    """Модель почти не заполняет срок: он стоял у одного поручения из сорока.
+
+    А вслух он звучит: «через две недели», «сегодня же», «на 30 ноября».
+    Правилу это по силам, как и адресату.
+    """
+    from minuteforge.tasks import spoken_due
+
+    assert spoken_due("Через две недели вернёмся на штаб.") == "Через две недели"
+    assert spoken_due("Отошлите фотографии прям сегодня же.") == "сегодня же"
+    assert spoken_due("Просьба подтвердите срок ввода на 30 ноября.") == "на 30 ноября"
+    assert spoken_due("Обращайтесь в течение ближайших двух недель.") == (
+        "в течение ближайших двух недель"
+    )
+    assert spoken_due("Организуйте сейчас фотоотчёт.") == ""
+
+
+def test_a_date_looking_back_is_not_a_deadline():
+    """«По информации на 2 сентября готовность 84%» — ссылка на прошлое.
+
+    Сроком назад не назначают, а в таблице контроля такая дата выглядит
+    просроченным поручением.
+    """
+    from minuteforge.tasks import spoken_due
+
+    assert spoken_due("По информации на 2 сентября строительная готовность 84%.") == ""
+    assert spoken_due(
+        "По информации на 2 сентября готовность 84%. Просьба подтвердить срок на 30 ноября."
+    ) == "на 30 ноября"
+
+
+def test_the_model_keeps_its_own_deadline():
+    from minuteforge.tasks import Task, with_due
+
+    tasks = [
+        Task(what="Подготовить справку", quote="Подготовьте справку. До среды."),
+        Task(what="Подготовить справку", due="до пятницы",
+             quote="Подготовьте справку. До среды."),
+    ]
+    filled = with_due(tasks)
+
+    assert filled[0].due == "До среды"
+    assert filled[1].due == "до пятницы"

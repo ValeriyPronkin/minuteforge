@@ -613,6 +613,66 @@ def with_addressee(tasks: Sequence[Task], *, chair: str = "") -> list[Task]:
     return filled
 
 
+#: Как срок звучит на совещании. Порядок важен: сперва то, что длиннее и
+#: определённее — «до конца года», «на 30 ноября», — иначе «до конца» съест
+#: короткое «до».
+_SPOKEN_DUE = re.compile(
+    r"(?:"
+    r"до\s+конца\s+(?:года|месяца|недели|квартала)"
+    r"|(?:до|к|на|в)\s+\d{1,2}\s+(?:январ|феврал|март|апрел|ма[йя]|июн|июл|"
+    r"август|сентябр|октябр|ноябр|декабр)\w*"
+    r"|(?:до|к|на)\s+\d{1,2}[.\-/]\d{1,2}(?:[.\-/]\d{2,4})?"
+    r"|(?:через|в\s+течение|в\s+течении)\s+(?:ближайш\w+\s+)?"
+    r"(?:\d+|[а-яё]+)\s*(?:недел\w*|дн\w*|день|месяц\w*|час\w*)?"
+    r"|(?:до|к|в)\s+(?:понедельник\w*|вторник\w*|сред[ыуе]|четверг\w*|"
+    r"пятниц\w*|суббот\w*|воскресен\w*)"
+    r"|сегодня(?:\s+же)?|завтра|послезавтра"
+    r"|еженедельно|ежемесячно|ежедневно|ежеквартально|постоянно"
+    r"|немедленно|срочно"
+    r")",
+    re.IGNORECASE,
+)
+
+
+#: После этих слов дата — не срок, а ссылка на прошлое: «по информации на
+#: 2 сентября строительная готовность 84%». Сроком назад не назначают.
+_ABOUT_THE_PAST = ("по информации", "по данным", "по состоянию", "на момент")
+
+
+def spoken_due(text: str) -> str:
+    """Срок, как он прозвучал в реплике.
+
+    Модель это поле почти не заполняет — на записи штаба срок стоял у
+    одного поручения из сорока, хотя вслух звучал у доброго десятка:
+    «через две недели», «до конца года», «сегодня же», «на 30 ноября».
+    Правилу это по силам, как и адресату.
+    """
+    text = text or ""
+    for found in _SPOKEN_DUE.finditer(text):
+        before = text[max(0, found.start() - 40):found.start()].lower()
+        if any(word in before for word in _ABOUT_THE_PAST):
+            continue
+        return " ".join(found.group(0).split())
+    return ""
+
+
+def with_due(tasks: Sequence[Task]) -> list[Task]:
+    """Дописывает срок из реплики там, где модель его не назвала.
+
+    Своё модель не переписывает. Сперва ищем в самой фразе поручения, потом
+    в соседних: «Подготовьте справку. До среды» — обычный способ назначить
+    срок, и во второй фразе он и стоит.
+    """
+    filled = []
+    for task in tasks:
+        if task.due or not task.quote:
+            filled.append(task)
+            continue
+        found = spoken_due(task.quote) or spoken_due(task.context)
+        filled.append(replace(task, due=clean_due(found)) if found else task)
+    return filled
+
+
 #: Слова, которыми на совещании поручают. Список закрытый и составлен по
 #: живым записям: повелительное наклонение по-русски не отличить от
 #: изъявительного одним правилом — «покажите» и «видите» устроены одинаково,
@@ -1033,10 +1093,13 @@ def extract_tasks(
     single = one_per_place(heard)
     if len(single) != len(heard):
         logger.info("Склеено по месту разговора: {}", len(heard) - len(single))
-    named = with_addressee(single, chair=chair)
+    named = with_due(with_addressee(single, chair=chair))
     added = sum(1 for was, now in zip(single, named) if not was.who and now.who)
     if added:
         logger.info("Исполнитель взят из обращения: {} поручений", added)
+    dated = sum(1 for was, now in zip(single, named) if not was.due and now.due)
+    if dated:
+        logger.info("Срок взят из реплики: {} поручений", dated)
     single = named
     if settings is not None and getattr(settings, "merge_similar", False) and single:
         single = merge_similar(single, client, json_mode=bool(json_mode))

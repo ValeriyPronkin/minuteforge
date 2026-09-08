@@ -47,6 +47,10 @@ NUMERALS: dict[str, int] = {
 #: «через месяц» — это «через один месяц».
 _UNITS = ("недел", "месяц", "день", "дня", "дней", "дне", "час", "год")
 
+#: Насколько дата должна остаться позади, чтобы считать её датой будущего
+#: года. Полгода: ближе к совещанию прошедшее число — это ссылка на прошлое.
+_LOOKS_LIKE_NEXT_YEAR = 180
+
 _DOTTED = re.compile(r"\b(\d{1,2})[.\-/](\d{1,2})(?:[.\-/](\d{2,4}))?\b")
 _DAY_MONTH = re.compile(r"\b(\d{1,2})\s+([а-яё]{3,})", re.IGNORECASE)
 _THROUGH = re.compile(
@@ -154,10 +158,15 @@ def _exact_date(lowered: str, meeting: date) -> date | None:
         month = _month_of(word)
         if month:
             named = _make(int(day), month, meeting.year)
-            # Названный месяц уже прошёл — значит, речь о следующем годе:
-            # «до 15 января» сказанное в декабре это январь следующего.
             if named and named < meeting:
-                return _make(int(day), month, meeting.year + 1)
+                # Далеко позади — значит, речь о следующем годе: «до 15
+                # января», сказанное в декабре, это январь следующего.
+                if (meeting - named).days > _LOOKS_LIKE_NEXT_YEAR:
+                    return _make(int(day), month, meeting.year + 1)
+                # А недавно прошедшая дата — не срок, а ссылка на прошлое:
+                # «по информации на 2 сентября готовность 84%». Сроком
+                # назад не назначают.
+                return None
             return named
     return None
 

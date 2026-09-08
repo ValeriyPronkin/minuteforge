@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import csv
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from io import StringIO
 from typing import Sequence
 
+from . import dates
 from .blocks import UNKNOWN, Transcript
 from .people import Person, canonical, find
 from .tasks import Task
@@ -122,7 +123,7 @@ class Protocol:
                 lines.append("Прозвучали, но ни исполнитель, ни регион не названы:")
                 lines.append("")
                 for task in self.needs_clarification:
-                    due = f", срок: {task.due}" if task.due else ""
+                    due = f", срок: {_due(task)}" if (task.due or task.due_date) else ""
                     lines.append(f"- **{_clock(task.at)}** {task.what}{due}")
 
         if with_transcript and self.transcript is not None:
@@ -214,14 +215,16 @@ class Protocol:
         # приходится только в спорных случаях. Выписывается куском, а не
         # одним предложением: «Просьба подтвердить» само по себе не говорит
         # ничего, а с соседней фразой — говорит всё.
+        # Срок двумя колонками: сказанное и дата. По дате сортируют и
+        # ставят напоминания, по сказанному спорят.
         writer.writerow(
             ["№", "Время", "Поручение", "Исполнитель", "Регион", "Срок",
-             "Кто сказал", "Цитата"]
+             "Срок датой", "Кто сказал", "Цитата"]
         )
         for number, task in enumerate(self.tasks, 1):
             writer.writerow([
                 number, _clock(task.at), task.what, task.who, task.region,
-                task.due, task.said_by, task.context or task.quote,
+                task.due, task.due_date, task.said_by, task.context or task.quote,
             ])
         return buffer.getvalue()
 
@@ -247,6 +250,16 @@ def build_protocol(
     выдуманного: приписать совещанию участника, которого не было, хуже, чем
     оставить строку незаполненной.
     """
+    # Сроки в даты: «через две недели» считаются от дня совещания, а не от
+    # дня, когда делопроизводитель открыл протокол. Нет даты в шапке — нет и
+    # дат в поручениях: выдумывать точку отсчёта нельзя.
+    meeting_day = dates.parse_meeting_date(date)
+    if meeting_day is not None:
+        tasks = [
+            replace(task, due_date=dates.as_text(dates.resolve(task.due, meeting_day)))
+            for task in tasks
+        ]
+
     if people:
         # Имена исполнителей приводятся к списку участников: в записи
         # порядок слов свободный, отчество распознаётся плохо, а в протоколе
@@ -256,6 +269,7 @@ def build_protocol(
                 what=task.what, who=canonical(task.who, people), due=task.due,
                 chunk=task.chunk, at=task.at, quote=task.quote,
                 context=task.context, said_by=task.said_by, region=task.region,
+                due_date=task.due_date,
             )
             for task in tasks
         ]
@@ -289,7 +303,7 @@ def _task_lines(tasks: Sequence[Task]) -> list[str]:
     """Поручения списком — то, что идёт в раздел «Решили»."""
     lines = []
     for number, task in enumerate(tasks, 1):
-        due = f", срок — {task.due}" if task.due else ""
+        due = f", срок — {_due(task)}" if (task.due or task.due_date) else ""
         place = f" [{_clock(task.at)}]" if task.at is not None else ""
         who = task.who or task.region or "исполнитель не назван"
         lines.append(f"{number}. {who}: {task.what}{due}.{place}")
@@ -312,9 +326,20 @@ def _task_table(tasks: Sequence[Task]) -> list[str]:
     for number, task in enumerate(tasks, 1):
         rows.append(
             f"| {number} | {_clock(task.at)} | {task.what} | {task.who or '—'} "
-            f"| {task.region or '—'} | {task.due or '—'} |"
+            f"| {task.region or '—'} | {_due(task)} |"
         )
     return rows
+
+
+def _due(task: Task) -> str:
+    """Срок так, как он прозвучал, и датой — если её удалось посчитать.
+
+    Сказанное не подменяется вычисленным: спорить будут о сказанном, а
+    работать по дате, и в документе должно стоять и то, и другое.
+    """
+    if task.due and task.due_date:
+        return f"{task.due} ({task.due_date})"
+    return task.due or task.due_date or "—"
 
 
 def _clock(seconds: float | None) -> str:

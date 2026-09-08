@@ -100,10 +100,13 @@ def test_date_is_never_invented():
 def test_csv_carries_every_task_including_unassigned():
     rows = list(csv.reader(StringIO(Protocol(tasks=TASKS).tasks_csv()), delimiter=";"))
     assert rows[0] == [
-        "№", "Время", "Поручение", "Исполнитель", "Регион", "Срок", "Кто сказал", "Цитата"
+        "№", "Время", "Поручение", "Исполнитель", "Регион", "Срок", "Срок датой",
+        "Кто сказал", "Цитата"
     ]
     assert len(rows) == 1 + len(TASKS)
-    assert rows[3] == ["3", "—", "Собрать справку по инциденту", "", "", "к пятнице", "", ""]
+    assert rows[3] == [
+        "3", "—", "Собрать справку по инциденту", "", "", "к пятнице", "", "", ""
+    ]
 
 
 def test_csv_uses_semicolon_for_excel():
@@ -184,10 +187,11 @@ def test_every_task_carries_its_place_in_the_recording():
 
     rows = list(csv.reader(StringIO(Protocol(tasks=tasks).tasks_csv()), delimiter=";"))
     assert rows[0] == [
-        "№", "Время", "Поручение", "Исполнитель", "Регион", "Срок", "Кто сказал", "Цитата"
+        "№", "Время", "Поручение", "Исполнитель", "Регион", "Срок", "Срок датой",
+        "Кто сказал", "Цитата"
     ]
     assert rows[1][1] == "01:05:30"
-    assert "подготовьте план" in rows[1][7]
+    assert "подготовьте план" in rows[1][8]
 
 
 def test_task_without_a_place_shows_a_dash_not_a_crash():
@@ -229,3 +233,38 @@ def test_a_task_with_only_a_region_is_work_not_a_question():
     text = protocol.as_markdown()
     assert "| Архангельская область |" in text
     assert "ни исполнитель, ни регион не названы" in text
+
+
+def test_a_relative_deadline_becomes_a_date():
+    """«Через две недели» — не срок, пока не известен день совещания.
+
+    Считается от него, а не от дня, когда делопроизводитель открыл
+    протокол. Сказанное при этом остаётся: спорить будут о нём, а работать
+    по дате.
+    """
+    protocol = build_protocol(
+        [Task("Усилить мониторинг", "Ким С.А.", "через две недели")],
+        date="08.09.2026, 11:00",
+    )
+
+    assert protocol.tasks[0].due_date == "22.09.2026"
+    assert "через две недели (22.09.2026)" in protocol.as_markdown()
+
+
+def test_without_a_meeting_date_nothing_is_invented():
+    """Точку отсчёта выдумывать нельзя: поручение получило бы срок, о
+    котором никто не договаривался."""
+    protocol = build_protocol([Task("Усилить мониторинг", "Ким С.А.", "через две недели")])
+
+    assert protocol.tasks[0].due_date == ""
+    assert "через две недели" in protocol.as_markdown()
+
+
+def test_a_standing_order_gets_no_date():
+    """«Еженедельно» — порядок работы, а не день."""
+    protocol = build_protocol(
+        [Task("Докладывать о ходе работ", "Ким С.А.", "еженедельно")],
+        date="08.09.2026",
+    )
+
+    assert protocol.tasks[0].due_date == ""

@@ -171,6 +171,11 @@ class Task:
     context: str = ""
     #: Кто это сказал.
     said_by: str = ""
+    #: Срок датой, посчитанный от дня совещания. Отдельно от ``due``:
+    #: там остаётся сказанное вслух — «через две недели», — а здесь то, по
+    #: чему ставят на контроль. Пусто, если дата совещания неизвестна или
+    #: срок в дату не переводится: «еженедельно» это порядок работы.
+    due_date: str = ""
     #: Чей вопрос разбирали, когда это прозвучало. Не то же самое, что
     #: исполнитель: исполнителя называют вслух, а регион берётся из хода
     #: совещания. Но по региону ответственного находят по своему списку, и
@@ -1078,7 +1083,7 @@ def attach_source(tasks: list[Task], chunk: Chunk) -> list[Task]:
             quote=found.quote if found else "",
             context=found.context if found else "",
             said_by=found.said_by if found else "",
-            region=task.region,
+            region=task.region, due_date=task.due_date,
         ))
     return attached
 
@@ -1388,6 +1393,7 @@ def _merge_group(tasks: list[Task], indexes: list[int]) -> Task:
         context=next((t.context for t in group if t.context), ""),
         said_by=next((t.said_by for t in group if t.said_by), ""),
         region=next((t.region for t in group if t.region), ""),
+        due_date=next((t.due_date for t in group if t.due_date), ""),
     )
 
 
@@ -1570,6 +1576,7 @@ def dedupe(tasks: Iterable[Task]) -> list[Task]:
             context=old_task.context or task.context,
             said_by=old_task.said_by or task.said_by,
             region=old_task.region or task.region,
+            due_date=old_task.due_date or task.due_date,
         )
     return kept
 

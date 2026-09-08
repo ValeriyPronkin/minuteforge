@@ -106,6 +106,136 @@ def split_into_chunks(
     ]
 
 
+#: Сколько фраз вокруг взять в окно. В соседней стоит то, чего в самой
+#: фразе нет: «Просьба подтвердить» — и рядом «цех компостирования на 95,7%
+#: готов», «до среды», имя того, к кому обращаются.
+WINDOW_CONTEXT = 1
+
+
+def split_into_windows(
+    blocks: Sequence[Block],
+    *,
+    directive: Callable[[str], bool],
+    around: int = WINDOW_CONTEXT,
+) -> list[Chunk]:
+    """Собирает окна вокруг фраз, в которых поручение слышно.
+
+    Другой способ нарезки, чем :func:`split_into_chunks`. Тот делит запись
+    подряд, и модель читает всё совещание целиком: на записи штаба это
+    30 тысяч токенов семью кусками по 4700. Мелкая модель на таком куске
+    теряет середину — поручений в нём полтора десятка, а выписывает она
+    первые несколько.
+
+    Здесь в модель уходит только то, где поручение слышно: фраза и её
+    соседи. Соседей ищем по всей стенограмме, а не внутри реплики: поручение
+    сплошь и рядом разложено на две — «Осталась выгрузка справочников, нужен
+    план работ» и в ответ «Сергей, подготовьте до пятницы». Разорви их, и в
+    протоколе останется план неизвестно чего.
+
+    Цена честная: правило ``directive`` решает, что модель увидит, а чего
+    не увидит вовсе. Промах правила теперь стоит поручения. Но тем же
+    правилом поручения отсеиваются и сейчас, только в конце, — так что
+    теряется ровно то, что и так не доживало до протокола.
+
+    :param directive: чем проверять фразу. Обычно
+        :func:`minuteforge.tasks.worth_showing`.
+    :param around: сколько фраз захватывать по сторонам.
+    """
+    # Стенограмма как сплошная череда фраз: чьи они, помним отдельно. Только
+    # так сосед справа находится и тогда, когда он у другого говорящего.
+    flat: list[tuple[Block, list[str], int]] = []
+    for block in blocks:
+        sentences = [s for s in _SENTENCE_SPLIT.split(block.text or "") if s.strip()]
+        for position in range(len(sentences)):
+            flat.append((block, sentences, position))
+
+    wanted: set[int] = set()
+    for index, (_, sentences, position) in enumerate(flat):
+        if directive(sentences[position]):
+            wanted.update(range(index - around, index + around + 1))
+    inside = sorted(i for i in wanted if 0 <= i < len(flat))
+
+    windows = [_window(flat, run) for run in _runs(inside)]
+    return [
+        Chunk(blocks=part, index=i, total=len(windows))
+        for i, part in enumerate(windows, 1)
+    ]
+
+
+def _runs(positions: list[int]) -> list[list[int]]:
+    """Идущие подряд номера — в одну группу.
+
+    Два поручения через фразу друг от друга дают перекрывающиеся окна.
+    Отправлять их двумя запросами значит дважды заплатить за один и тот же
+    текст и получить один и тот же пункт дважды.
+    """
+    runs: list[list[int]] = []
+    for position in positions:
+        if runs and position == runs[-1][-1] + 1:
+            runs[-1].append(position)
+        else:
+            runs.append([position])
+    return runs
+
+
+def _window(
+    flat: list[tuple[Block, list[str], int]],
+    run: list[int],
+) -> list[Block]:
+    """Окно как несколько реплик: подряд идущие фразы одного говорящего вместе.
+
+    Говорящий сохраняется у каждой части: модель должна видеть, что «нужен
+    план работ» и «подготовьте до пятницы» сказаны разными людьми — иначе
+    она припишет поручение тому, кто на него ответил.
+    """
+    parts: list[Block] = []
+    for index in run:
+        block, sentences, position = flat[index]
+        if parts and parts[-1].speaker == block.speaker and _same_block(flat, index):
+            parts[-1] = _grow(parts[-1], block, sentences, position)
+            continue
+        parts.append(_piece(block, sentences, position, position))
+    return parts
+
+
+def _same_block(flat: list[tuple[Block, list[str], int]], index: int) -> bool:
+    """Та же ли это реплика, что предыдущая фраза."""
+    return index > 0 and flat[index - 1][0] is flat[index][0]
+
+
+def _grow(part: Block, block: Block, sentences: list[str], position: int) -> Block:
+    """Дописывает фразу к части окна, сдвигая её конец."""
+    grown = _piece(block, sentences, position, position)
+    return Block(
+        part.speaker,
+        f"{part.text} {grown.text}".strip(),
+        part.start,
+        grown.end if grown.end is not None else part.end,
+    )
+
+
+def _piece(block: Block, sentences: list[str], first: int, last: int) -> Block:
+    """Часть реплики со своим временем.
+
+    Время считается по доле текста — точнее нельзя, оно известно только для
+    реплики целиком. Зато отметка попадает в нужную минуту десятиминутного
+    выступления, а не в его начало.
+    """
+    text = " ".join(sentences[first:last + 1]).strip()
+    length = len(block.text or "")
+    before = len(" ".join(sentences[:first]))
+    start, end = block.start, block.end
+    if start is None or end is None or end <= start or not length:
+        return Block(block.speaker, text, start, end)
+    span = end - start
+    return Block(
+        block.speaker,
+        text,
+        start + span * (min(length, before) / length),
+        start + span * (min(length, before + len(text)) / length),
+    )
+
+
 def _split_long_block(
     block: Block,
     max_tokens: int,

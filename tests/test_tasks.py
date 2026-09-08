@@ -902,3 +902,27 @@ def test_three_orders_in_one_sentence_stay_three():
     ])
 
     assert len(kept) == 3
+
+
+def test_the_quote_comes_with_its_neighbours():
+    """Одного предложения для проверки мало.
+
+    «Просьба подтвердить» само по себе не говорит, что подтвердить, — а с
+    соседней фразой говорит всё. Человек, вычитывающий протокол, читает
+    именно кусок, а не обрезанную фразу.
+    """
+    from minuteforge.blocks import Block
+    from minuteforge.chunking import Chunk
+    from minuteforge.tasks import Task, attach_source
+
+    chunk = Chunk(blocks=[Block(
+        "SPEAKER_08",
+        "Цех компостирования готов на 95,7%. Просьба подтвердить. "
+        "Следующий регион у нас Чувашия.",
+        0, 60,
+    )])
+    task = attach_source([Task(what="Подтвердить готовность цеха")], chunk)[0]
+
+    assert task.quote == "Просьба подтвердить."
+    assert "95,7%" in task.context
+    assert "Чувашия" in task.context

@@ -204,14 +204,16 @@ class Protocol:
         writer = csv.writer(buffer, delimiter=";", lineterminator="\n")
         # Цитата в таблице — то, ради чего она и открывается: по ней видно
         # сразу, поручение это или изложение доклада, и сверяться с записью
-        # приходится только в спорных случаях.
+        # приходится только в спорных случаях. Выписывается куском, а не
+        # одним предложением: «Просьба подтвердить» само по себе не говорит
+        # ничего, а с соседней фразой — говорит всё.
         writer.writerow(
             ["№", "Время", "Поручение", "Исполнитель", "Срок", "Кто сказал", "Цитата"]
         )
         for number, task in enumerate(self.tasks, 1):
             writer.writerow([
                 number, _clock(task.at), task.what, task.who, task.due,
-                task.said_by, task.quote,
+                task.said_by, task.context or task.quote,
             ])
         return buffer.getvalue()
 
@@ -244,7 +246,8 @@ def build_protocol(
         tasks = [
             Task(
                 what=task.what, who=canonical(task.who, people), due=task.due,
-                chunk=task.chunk, at=task.at, quote=task.quote, said_by=task.said_by,
+                chunk=task.chunk, at=task.at, quote=task.quote,
+                context=task.context, said_by=task.said_by,
             )
             for task in tasks
         ]

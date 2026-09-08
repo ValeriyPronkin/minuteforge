@@ -1,7 +1,12 @@
 import pytest
 
 from minuteforge.blocks import Block
-from minuteforge.chunking import Chunk, estimate_tokens, split_into_chunks
+from minuteforge.chunking import (
+    Chunk,
+    estimate_tokens,
+    split_into_chunks,
+    split_into_windows,
+)
 
 
 def reply(speaker="SPEAKER_01", text="Слово."):
@@ -104,3 +109,75 @@ def test_custom_counter_is_used():
 
     split_into_chunks([reply(), reply()], max_tokens=1, count_tokens=counter)
     assert calls, "переданный счётчик должен использоваться"
+
+
+def heard(sentence):
+    """Простое правило для проверки нарезки: поручает то, где «подготовьте»."""
+    return "подготовьте" in sentence.lower()
+
+
+def test_a_window_takes_the_neighbouring_sentence_from_another_reply():
+    """Поручение сплошь и рядом разложено на две реплики.
+
+    «Осталась выгрузка справочников, нужен план работ» и в ответ «Сергей,
+    подготовьте до пятницы». Возьми окно только внутри реплики — и в
+    протоколе останется план неизвестно чего.
+    """
+    windows = split_into_windows([
+        Block("SPEAKER_00", "Начинаем. Сроки по интеграции?", 0, 6),
+        Block("SPEAKER_01", "Осталась выгрузка справочников, нужен план работ.", 6, 12),
+        Block("SPEAKER_00", "Сергей, подготовьте до пятницы.", 12, 18),
+    ], directive=heard)
+
+    assert len(windows) == 1
+    text = windows[0].text
+    assert "выгрузка справочников" in text
+    assert "подготовьте до пятницы" in text.lower()
+    assert "Сроки по интеграции" not in text, "дальше соседней фразы окно не растёт"
+
+
+def test_a_window_keeps_who_said_what():
+    """Модель должна видеть, что фразы сказаны разными людьми: иначе она
+    припишет поручение тому, кто на него ответил."""
+    windows = split_into_windows([
+        Block("SPEAKER_01", "Нужен план работ.", 0, 6),
+        Block("SPEAKER_00", "Сергей, подготовьте до пятницы.", 6, 12),
+    ], directive=heard)
+
+    assert windows[0].speakers == ["SPEAKER_01", "SPEAKER_00"]
+    assert windows[0].text.startswith("SPEAKER_01: Нужен план работ.")
+
+
+def test_orders_close_together_share_one_window():
+    """Два поручения через фразу друг от друга — одно окно, а не два.
+
+    Иначе один и тот же текст уедет в модель дважды и вернётся двумя
+    одинаковыми пунктами.
+    """
+    windows = split_into_windows([
+        Block("SPEAKER_00", "Подготовьте план. Это важно. Подготовьте справку.", 0, 30),
+    ], directive=heard)
+
+    assert len(windows) == 1
+    assert "Это важно" in windows[0].text
+
+
+def test_a_meeting_without_orders_gives_no_windows():
+    """Совещание, на котором ничего не поручили, не даёт ни одного запроса —
+    и это нормальный ответ, а не сбой."""
+    windows = split_into_windows([
+        Block("SPEAKER_00", "Обсудили статус. Вопросов нет.", 0, 30),
+    ], directive=heard)
+
+    assert windows == []
+
+
+def test_a_window_knows_its_place_in_the_recording():
+    """Время окна — не начало десятиминутного выступления, а то место, где
+    поручение прозвучало: по нему человек перематывает запись."""
+    long_talk = "Слово. " * 100 + "Подготовьте справку."
+    windows = split_into_windows(
+        [Block("SPEAKER_00", long_talk, 0, 600)], directive=heard
+    )
+
+    assert windows[0].blocks[0].start > 500, "окно в конце выступления"

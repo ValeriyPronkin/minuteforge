@@ -19,7 +19,7 @@ from typing import Iterable, Sequence
 
 from loguru import logger
 
-from .blocks import UNKNOWN
+from .blocks import UNKNOWN, is_soundcheck
 from .chunking import Chunk
 from .llm import LLMClient, LLMError
 from .progress import Progress, Step, report
@@ -160,9 +160,13 @@ class Task:
     #: него человеку приходится искать место в двухчасовом видео, и проверка
     #: восьмидесяти пунктов съедает больше времени, чем сэкономил разбор.
     at: float | None = None
-    #: Реплика, из которой поручение выписано, как она есть в стенограмме.
-    #: По ней видно сразу, поручение это или изложение доклада.
+    #: Предложение, из которого поручение выписано, как оно есть в
+    #: стенограмме. По нему идёт отсев: поручение это или изложение доклада.
     quote: str = ""
+    #: То же место, но куском: цитата вместе с соседними фразами. Одно
+    #: предложение для проверки человеком коротко — «Просьба подтвердить»
+    #: не говорит, что подтвердить, — а в соседних стоят и предмет, и срок.
+    context: str = ""
     #: Кто это сказал.
     said_by: str = ""
 
@@ -551,6 +555,54 @@ def is_directive(sentence: str) -> bool:
     )
 
 
+#: Вежливость. Сама по себе она ничего не поручает: «подскажите,
+#: пожалуйста» и «просьба» одинаково открывают и поручение, и перекличку.
+#: Отличать их приходится по тому, что стоит рядом.
+_POLITENESS = frozenset("""
+пожалуйста просьба прошу просим просил просила подскажите скажите давайте
+""".split())
+
+
+def asks_for_work(text: str) -> bool:
+    """Поручение ли это, если не считать вежливости.
+
+    Нужно там, где вежливых слов не хватает для решения: внутри переклички.
+    «Подскажите, пожалуйста, Республику Калмыкию слышно, видно?» устроено
+    как поручение — есть и «подскажите», и «пожалуйста», — но поручено этим
+    ничего. А «Слышно. Иванов, подготовьте справку» поручает, и отличает
+    его глагол, который вежливостью не является.
+    """
+    words = re.findall(r"\w+", (text or "").lower())
+    if not is_directive(text):
+        return False
+    if any(word in DIRECTIVE_WORDS and word not in _POLITENESS for word in words):
+        return True
+    return any(
+        len(word) > 4
+        and word.endswith(_IMPERATIVE_TAIL)
+        and word not in _NOT_A_DIRECTIVE_TAIL
+        and word not in _POLITENESS
+        for word in words
+    )
+
+
+def worth_showing(sentence: str) -> bool:
+    """Стоит ли показывать эту фразу модели.
+
+    Так отбираются окна: модель читает не всё совещание, а фразы, в которых
+    поручение слышно, вместе с соседними.
+
+    Перекличка разбирается отдельно. Реплику целиком она отсеивается не
+    всегда: «Это вот шестая. Сейчас, да, смотрите… Подскажите, видно, да?» —
+    длинная, под правило о перекличке не попадает, а поручения в ней нет.
+    Пофразно попадает, и тогда решает :func:`asks_for_work`: «подскажите,
+    видно?» отпадает, «слышно, Иванов, подготовьте справку» остаётся.
+    """
+    if is_soundcheck(sentence):
+        return asks_for_work(sentence)
+    return is_directive(sentence)
+
+
 def keep_directives(tasks: Iterable[Task]) -> list[Task]:
     """Оставляет поручения, которые слышны в реплике-источнике.
 
@@ -663,6 +715,10 @@ def extract_tasks(
     """
     collected: list[Task] = []
     total = len(chunks) or 1
+    # До цикла: окон может не быть вовсе — на совещании, где ничего не
+    # поручили, отбор по фразам не даст ни одного, и настройки всё равно
+    # нужны дальше.
+    settings = getattr(client, "settings", None)
 
     for position, chunk in enumerate(chunks, 1):
         title = f"Фрагмент {chunk.index} из {chunk.total}"
@@ -670,7 +726,6 @@ def extract_tasks(
         report(progress, Step(name="chunk", title=title, share=(position - 1) / total))
 
         started = time.perf_counter()
-        settings = getattr(client, "settings", None)
         system, user = build_prompt(
             chunk,
             json_mode=bool(json_mode),
@@ -794,14 +849,15 @@ def attach_source(tasks: list[Task], chunk: Chunk) -> list[Task]:
     for task in tasks:
         words = _significant(task.what)
         found = _best_sentence(words, chunk) if words else None
-        block = found[3] if found else None
+        block = found.block if found else None
         attached.append(Task(
             what=task.what,
             who=task.who if _who_holds(task.who, block, chunk) else "",
             due=task.due, chunk=task.chunk,
-            at=found[0] if found else None,
-            quote=found[1] if found else "",
-            said_by=found[2] if found else "",
+            at=found.at if found else None,
+            quote=found.quote if found else "",
+            context=found.context if found else "",
+            said_by=found.said_by if found else "",
         ))
     return attached
 
@@ -865,29 +921,60 @@ def _named_in(text: str, who: str) -> bool:
     return False
 
 
-def _best_sentence(words: set[str], chunk: Chunk) -> tuple | None:
+@dataclass
+class Source:
+    """Место в стенограмме, откуда выписано поручение."""
+
+    at: float | None
+    quote: str
+    #: Цитата с соседними фразами — кусок, который читает человек.
+    context: str
+    said_by: str
+    block: object
+
+
+#: Сколько фраз вокруг цитаты входит в кусок. Одной хватает: срок и адресат
+#: стоят вплотную — «Просьба подтвердить» и следом «цех компостирования на
+#: 95,7% готов». Две уже тянут за собой соседнее поручение.
+CONTEXT_SENTENCES = 1
+
+
+def _best_sentence(words: set[str], chunk: Chunk) -> Source | None:
     """Предложение, больше всего похожее на поручение.
 
     Совпадение считается долей от слов поручения, а не от слов предложения:
     иначе выигрывает самое длинное, в котором просто больше слов. При равном
     счёте берётся короткое — цитата в одну строку полезнее абзаца.
     """
-    best = None
+    best: Source | None = None
     best_score = 0.0
     for block in chunk.blocks:
+        sentences = _sentences(block.text)
         offset = 0
-        for sentence in _sentences(block.text):
+        for position, sentence in enumerate(sentences):
             share = len(words & _significant(sentence)) / len(words)
             # Короткое при равном счёте: длинное предложение попадает в счёт
             # случайными совпадениями, и цитата из него нечитаема.
             better = share > best_score or (
-                share == best_score and best is not None and len(sentence) < len(best[1])
+                share == best_score and best is not None and len(sentence) < len(best.quote)
             )
             if share > 0 and better:
                 best_score = share
-                best = (_moment(block, offset), _short_quote(sentence), block.speaker, block)
+                best = Source(
+                    at=_moment(block, offset),
+                    quote=_short_quote(sentence),
+                    context=_with_neighbours(sentences, position),
+                    said_by=block.speaker,
+                    block=block,
+                )
             offset += len(sentence)
     return best
+
+
+def _with_neighbours(sentences: list[str], position: int) -> str:
+    """Цитата вместе с соседними фразами — тем куском, что читает человек."""
+    start = max(0, position - CONTEXT_SENTENCES)
+    return " ".join(sentences[start:position + CONTEXT_SENTENCES + 1]).strip()
 
 
 def _sentences(text: str) -> list[str]:
@@ -1077,6 +1164,7 @@ def _merge_group(tasks: list[Task], indexes: list[int]) -> Task:
         chunk=min(t.chunk for t in group),
         at=next((t.at for t in group if t.at is not None), None),
         quote=next((t.quote for t in group if t.quote), ""),
+        context=next((t.context for t in group if t.context), ""),
         said_by=next((t.said_by for t in group if t.said_by), ""),
     )
 
@@ -1142,6 +1230,7 @@ def dedupe(tasks: Iterable[Task]) -> list[Task]:
             chunk=min(old_task.chunk, task.chunk) or old_task.chunk,
             at=old_task.at if old_task.at is not None else task.at,
             quote=old_task.quote or task.quote,
+            context=old_task.context or task.context,
             said_by=old_task.said_by or task.said_by,
         )
     return kept

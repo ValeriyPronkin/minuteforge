@@ -926,7 +926,8 @@ if protocol is not None:
                 f"{int(stamp)//3600:02d}:{int(stamp)%3600//60:02d}:{int(stamp)%60:02d}"
                 if stamp is not None else "—"
             )
-            st.markdown(f"**{number}. {task.what}**  \n`{clock}` {task.said_by}: {task.quote}")
+            said = task.context or task.quote
+            st.markdown(f"**{number}. {task.what}**  \n`{clock}` {task.said_by}: {said}")
 
     with st.expander("Скачать себе"):
         st.caption(

@@ -29,12 +29,12 @@ from .blocks import (
     rename_speakers,
 )
 from .checks import Suspicion, suspicious
-from .chunking import split_into_chunks
+from .chunking import estimate_tokens, split_into_chunks, split_into_windows
 from .config import Settings
 from .llm import LLMClient
 from .people import Person
 from .protocol import Protocol, build_protocol
-from .tasks import extract_tasks, is_directive
+from .tasks import asks_for_work, extract_tasks, worth_showing
 from .transcribe import (
     STEP_TITLES,
     RecognitionError,
@@ -215,20 +215,34 @@ def protocol_from_transcript(
     #
     # Реплика, в которой поручение слышно, остаётся, даже если похожа на
     # перекличку: «Слышно. Иванов, подготовьте справку» сказано вперемешку,
-    # и терять вторую половину из-за первой нельзя.
+    # и терять вторую половину из-за первой нельзя. Одной вежливости для
+    # этого мало: «подскажите, пожалуйста, Калмыкию слышно?» — перекличка,
+    # и в протоколе она стояла пунктом «Подключить Республику Калмыкию».
     for_model, skipped = (
-        drop_soundcheck(blocks, keep=is_directive)
+        drop_soundcheck(blocks, keep=asks_for_work)
         if settings.drop_soundcheck else (blocks, 0)
     )
     if skipped:
         logger.info("Перекличка пропущена: {} реплик из {}", skipped, len(blocks))
 
-    chunks = split_into_chunks(
-        for_model,
-        max_tokens=settings.chunk_budget,
-        overlap_blocks=settings.chunk_overlap_blocks,
-    )
-    logger.info("Стенограмма разбита на {} фрагментов", len(chunks))
+    if settings.extract_by_phrase:
+        # Модель читает не совещание, а места, где поручение слышно. Кусок в
+        # четыре тысячи токенов ей не по силам: поручений в нём полтора
+        # десятка, а выписывает она первые несколько.
+        chunks = split_into_windows(for_model, directive=worth_showing)
+        logger.info(
+            "Отобрано окон: {} (в них ~{} токенов из ~{} во всей стенограмме)",
+            len(chunks),
+            sum(estimate_tokens(c.text) for c in chunks),
+            sum(estimate_tokens(f"{b.speaker}: {b.text}") for b in for_model),
+        )
+    else:
+        chunks = split_into_chunks(
+            for_model,
+            max_tokens=settings.chunk_budget,
+            overlap_blocks=settings.chunk_overlap_blocks,
+        )
+        logger.info("Стенограмма разбита на {} фрагментов", len(chunks))
 
     warm_up(client, progress)
 

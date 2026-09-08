@@ -47,7 +47,7 @@ class FakeBackend:
 
 class FakeClient:
     def __init__(self, *answers):
-        self.answers = list(answers) or [ANSWER]
+        self.answers = list(answers)
         self.prompts = []
         self.warmed = False
 
@@ -59,7 +59,12 @@ class FakeClient:
             self.warmed = True
             return Reply(text="Да")
         self.prompts.append(user)
-        return Reply(text=self.answers.pop(0) if self.answers else NOTHING_FOUND)
+        if self.answers:
+            return Reply(text=self.answers.pop(0))
+        # Без заданных ответов отвечаем по тексту запроса, а не по очереди:
+        # окон несколько, и какое из них придёт первым, решает нарезка.
+        # Очередь привязывала бы ответ к чужому месту стенограммы.
+        return Reply(text=ANSWER if "подготовьте" in user.lower() else NOTHING_FOUND)
 
 
 @pytest.fixture
@@ -359,6 +364,27 @@ def test_roll_call_is_dropped_only_on_the_way_to_the_model(tmp_path):
 
 
 def test_roll_call_filter_can_be_turned_off():
+    """Отключённый фильтр переклички отдаёт модели всё.
+
+    Проверяется на сплошной нарезке: при отборе по фразам перекличка до
+    модели не доходит в любом случае — не потому, что её отсеяли как
+    перекличку, а потому, что поручения в ней не слышно.
+    """
+    transcript_with_roll_call = Transcript([
+        Block("SPEAKER_00", "Саратов, как слышно, видно?", 0, 5),
+        Block("SPEAKER_02", "Коллеги, начинаем заседание.", 10, 60),
+    ])
+    client = FakeClient()
+    protocol_from_transcript(
+        transcript_with_roll_call,
+        Settings(drop_soundcheck=False, extract_by_phrase=False),
+        client=client,
+    )
+    assert "как слышно" in client.prompts[0]
+
+
+def test_the_roll_call_does_not_reach_the_model_by_phrases():
+    """При отборе по фразам перекличка не доезжает и без своего фильтра."""
     transcript_with_roll_call = Transcript([
         Block("SPEAKER_00", "Саратов, как слышно, видно?", 0, 5),
         Block("SPEAKER_02", "Коллеги, начинаем заседание.", 10, 60),
@@ -367,7 +393,7 @@ def test_roll_call_filter_can_be_turned_off():
     protocol_from_transcript(
         transcript_with_roll_call, Settings(drop_soundcheck=False), client=client
     )
-    assert "как слышно" in client.prompts[0]
+    assert client.prompts == []
 
 
 def test_only_the_asked_part_is_extracted(tmp_path, with_token, monkeypatch):

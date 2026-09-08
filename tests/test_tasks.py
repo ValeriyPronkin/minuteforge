@@ -926,3 +926,32 @@ def test_the_quote_comes_with_its_neighbours():
     assert task.quote == "Просьба подтвердить."
     assert "95,7%" in task.context
     assert "Чувашия" in task.context
+
+
+def test_a_filler_is_not_an_order():
+    """«Да, смотрите…» и «давайте сэкономим время» — присказка.
+
+    По ним в протоколе стояли пункты «Показать прессу» и «Экономить
+    время»: слово обращено к вниманию, а не к работе.
+    """
+    from minuteforge.tasks import is_directive
+
+    assert not is_directive("Это вот шестая. Сейчас, да, смотрите, а я пока покажу.")
+    assert not is_directive("Принято. Давайте сэкономим время.")
+    assert is_directive("Смотрите на этот слайд и подготовьте справку."), (
+        "рядом с настоящим поручением присказка ему не мешает"
+    )
+
+
+def test_the_roll_call_asking_to_confirm_the_line_is_not_an_order():
+    """«Красноярский край видно, слышно, подтвердите?» — это про связь.
+
+    В протоколе это стояло пунктом «Подтвердить» с исполнителем-участником.
+    Вне переклички то же слово поручает, и там оно остаётся.
+    """
+    from minuteforge.tasks import worth_showing
+
+    assert not worth_showing("Добрый день, Красноярский край видно, слышно, поттвердите?")
+    assert not worth_showing("Коллеги, просьба проверить микрофон.")
+    assert worth_showing("Коллеги Ростовской области, просьба подтвердите срок ввода.")
+    assert worth_showing("Слышно. Иванов, подготовьте справку.")

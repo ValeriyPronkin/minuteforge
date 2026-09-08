@@ -1163,3 +1163,79 @@ def test_the_model_keeps_its_own_deadline():
 
     assert filled[0].due == "До среды"
     assert filled[1].due == "до пятницы"
+
+
+def test_one_phrase_gives_one_item():
+    """Три действия одной фразой — одно поручение, а не три строки.
+
+    Адресат у них один и срок один; тремя строками в таблице контроля это
+    только запутает.
+    """
+    from minuteforge.tasks import Task, one_per_phrase
+
+    quote = (
+        "Передайте разговор, все фотографии отправьте губернатору с подробным "
+        "отчётом, кратно усиленным мониторингом муниципальных образований."
+    )
+    kept = one_per_phrase([
+        Task(what="Передать разговор", quote=quote, at=10.0),
+        Task(what="Отправить фотографии губернатору", quote=quote, who="Ставропольский край"),
+        Task(what="Усилить мониторинг муниципальных образований", quote=quote, due="сегодня"),
+    ])
+
+    assert len(kept) == 1
+    assert kept[0].what == (
+        "Передать разговор; отправить фотографии губернатору; "
+        "усилить мониторинг муниципальных образований"
+    )
+    assert kept[0].who == "Ставропольский край", "адресат берётся оттуда, где он назван"
+    assert kept[0].due == "сегодня"
+    assert kept[0].at == 10.0
+
+
+def test_orders_from_different_phrases_stay_apart():
+    from minuteforge.tasks import Task, one_per_phrase
+
+    kept = one_per_phrase([
+        Task(what="Подготовить справку", quote="Подготовьте справку."),
+        Task(what="Организовать фотоотчёт", quote="Организуйте фотоотчёт."),
+    ])
+
+    assert len(kept) == 2
+
+
+def test_a_paragraph_without_full_stops_is_not_merged():
+    """«Одна фраза» решается по точкам, а расставляет их распознавание.
+
+    Там, где две минуты речи приехали одним предложением, сведение дало бы
+    пункт, по которому нельзя спросить. Лучше оставить раздельно.
+    """
+    from minuteforge.tasks import Task, one_per_phrase
+
+    quote = "И вот " + "дальше говорим про объекты и площадки " * 10
+    group = [
+        Task(what="Обновить контейнерный парк во всех муниципальных образованиях округа",
+             quote=quote),
+        Task(what="Завершить создание контейнерных площадок по утверждённому графику",
+             quote=quote),
+        Task(what="Обеспечить своевременный вывоз крупногабаритных отходов из дворов",
+             quote=quote),
+        Task(what="Представить фотоматериалы по каждой площадке отдельным отчётом",
+             quote=quote),
+        Task(what="Согласовать с региональным оператором маршруты вывоза на зимний период",
+             quote=quote),
+    ]
+
+    assert len(one_per_phrase(group)) == 5
+
+
+def test_the_same_action_said_twice_is_not_doubled():
+    from minuteforge.tasks import Task, one_per_phrase
+
+    quote = "Организуйте фотоотчёт прямо сейчас."
+    kept = one_per_phrase([
+        Task(what="Организовать фотоотчёт прямо сейчас", quote=quote),
+        Task(what="Организовать фотоотчёт", quote=quote),
+    ])
+
+    assert kept[0].what == "Организовать фотоотчёт прямо сейчас"

@@ -950,6 +950,86 @@ def _without_scraps(tasks: Sequence[Task]) -> list[Task]:
     return kept
 
 
+#: Длиннее этого сведённый пункт не читается. Ограничение нужно не ради
+#: красоты: «одна фраза» у нас решается по точкам, которые расставило
+#: распознавание, а оно их иногда не ставит вовсе. Там, где две минуты речи
+#: приехали одним предложением, сведение дало бы пункт, по которому нельзя
+#: спросить. В таком случае лучше оставить как было — раздельно.
+ONE_PHRASE_LIMIT = 300
+
+
+def one_per_phrase(tasks: Sequence[Task]) -> list[Task]:
+    """Сводит в один пункт поручения, сказанные одной фразой.
+
+    «Передайте разговор, все фотографии отправьте губернатору с подробным
+    отчётом, кратно усиленным мониторингом всех муниципальных образований» —
+    это три действия, но одно поручение: адресат один, срок один, и в
+    таблице контроля тремя строками оно только запутает.
+
+    Отличается от :func:`one_per_place` тем, что там из похожих оставляли
+    одно, а здесь разные складываются вместе: ни одно действие не теряется.
+    """
+    order: list[str] = []
+    groups: dict[str, list[Task]] = {}
+    for task in tasks:
+        key = _normalize(task.quote) if task.quote else f"без цитаты {len(order)}"
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(task)
+
+    kept: list[Task] = []
+    for key in order:
+        group = groups[key]
+        if len(group) == 1:
+            kept.append(group[0])
+            continue
+        joined = _join_actions(group)
+        if len(joined) > ONE_PHRASE_LIMIT:
+            # Фраза оказалась не фразой, а абзацем без точек. Разбирать её
+            # мы не умеем, поэтому оставляем как было.
+            kept.extend(group)
+            continue
+        kept.append(replace(
+            group[0],
+            what=joined,
+            who=next((t.who for t in group if t.who), ""),
+            due=next((t.due for t in group if t.due), ""),
+            region=next((t.region for t in group if t.region), ""),
+            at=next((t.at for t in group if t.at is not None), None),
+        ))
+    return kept
+
+
+def _join_actions(group: Sequence[Task]) -> str:
+    """Складывает действия одной фразы в один пункт.
+
+    Повторы отбрасываются: модель выписывает одно и то же действие дважды
+    разными словами, и в сведённом пункте это видно сразу.
+    """
+    parts: list[str] = []
+    for task in group:
+        what = (task.what or "").strip().rstrip(".")
+        if not what:
+            continue
+        words = _significant(what)
+        if any(words and words <= _significant(part) for part in parts):
+            continue
+        parts.append(what)
+    if not parts:
+        return ""
+    tail = [_lowered(part) for part in parts[1:]]
+    return "; ".join([parts[0], *tail])
+
+
+def _lowered(text: str) -> str:
+    """Со строчной — кроме сокращений вроде ППК, которые пишутся прописными."""
+    first = text.split(" ", 1)[0]
+    if len(first) > 1 and first.isupper():
+        return text
+    return text[0].lower() + text[1:]
+
+
 def _fuller(task: Task, other: Task) -> bool:
     """Какое из двух поручений полнее — то и остаётся в протоколе."""
     if bool(task.who) != bool(other.who):
@@ -1093,6 +1173,14 @@ def extract_tasks(
     single = one_per_place(heard)
     if len(single) != len(heard):
         logger.info("Склеено по месту разговора: {}", len(heard) - len(single))
+    if settings is None or getattr(settings, "one_task_per_phrase", True):
+        together = one_per_phrase(single)
+        if len(together) != len(single):
+            logger.info(
+                "Сведено в один пункт как сказанное одной фразой: {} -> {}",
+                len(single), len(together),
+            )
+        single = together
     named = with_due(with_addressee(single, chair=chair))
     added = sum(1 for was, now in zip(single, named) if not was.who and now.who)
     if added:

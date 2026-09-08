@@ -870,12 +870,13 @@ if protocol is not None:
     found, unclear = len(protocol.actionable), len(protocol.needs_clarification)
     metrics = st.columns(3)
     metrics[0].metric("Поручений", found + unclear)
-    metrics[1].metric("С исполнителем", found)
+    metrics[1].metric("С адресатом", found)
     metrics[2].metric("Требуют уточнения", unclear)
     if unclear:
         st.warning(
-            f"{unclear} поручений прозвучали без исполнителя. Они не выброшены "
-            "и не получили выдуманного адресата — смотрите отдельный раздел."
+            f"{unclear} поручений прозвучали без адресата: не названы ни "
+            "исполнитель, ни регион. Они не выброшены и не получили "
+            "выдуманного адресата — смотрите отдельный раздел."
         )
 
     if not protocol.tasks and protocol.answers:

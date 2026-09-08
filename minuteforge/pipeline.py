@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Sequence
@@ -33,6 +33,7 @@ from .chunking import estimate_tokens, split_into_chunks, split_into_windows
 from .config import Settings
 from .llm import LLMClient
 from .people import Person
+from . import regions
 from .protocol import Protocol, build_protocol
 from .tasks import asks_for_work, extract_tasks, worth_showing
 from .transcribe import (
@@ -252,6 +253,16 @@ def protocol_from_transcript(
         corpus=named.as_text(),
     )
     logger.info("Найдено поручений: {}", len(tasks))
+
+    # Чей вопрос разбирали. Считается по всей стенограмме, а не по окну:
+    # регион объявляют один раз, а поручают потом четверть часа.
+    marks = regions.follow(for_model)
+    tasks = [replace(task, region=regions.at(marks, task.at)) for task in tasks]
+    with_region = sum(1 for task in tasks if task.region)
+    logger.info(
+        "Разбор шёл по {} регионам, у {} поручений регион определён",
+        len({name for _, name in marks if name}), with_region,
+    )
 
     return build_protocol(
         tasks,

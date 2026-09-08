@@ -33,7 +33,7 @@ def test_tasks_split_into_actionable_and_unclear():
 def test_markdown_has_a_table_and_a_clarification_section():
     text = Protocol(tasks=TASKS, date="05.06.2025").as_markdown()
     assert "**Дата:** 05.06.2025" in text
-    assert "| 1 | — | Подготовить отчёт | Иванов | до среды |" in text
+    assert "| 1 | — | Подготовить отчёт | Иванов | — | до среды |" in text
     assert "### Требуют уточнения" in text
     assert "- **—** Собрать справку по инциденту, срок: к пятнице" in text
 
@@ -100,10 +100,10 @@ def test_date_is_never_invented():
 def test_csv_carries_every_task_including_unassigned():
     rows = list(csv.reader(StringIO(Protocol(tasks=TASKS).tasks_csv()), delimiter=";"))
     assert rows[0] == [
-        "№", "Время", "Поручение", "Исполнитель", "Срок", "Кто сказал", "Цитата"
+        "№", "Время", "Поручение", "Исполнитель", "Регион", "Срок", "Кто сказал", "Цитата"
     ]
     assert len(rows) == 1 + len(TASKS)
-    assert rows[3] == ["3", "—", "Собрать справку по инциденту", "", "к пятнице", "", ""]
+    assert rows[3] == ["3", "—", "Собрать справку по инциденту", "", "", "к пятнице", "", ""]
 
 
 def test_csv_uses_semicolon_for_excel():
@@ -183,9 +183,11 @@ def test_every_task_carries_its_place_in_the_recording():
     assert "01:05:30" in text
 
     rows = list(csv.reader(StringIO(Protocol(tasks=tasks).tasks_csv()), delimiter=";"))
-    assert rows[0] == ["№", "Время", "Поручение", "Исполнитель", "Срок", "Кто сказал", "Цитата"]
+    assert rows[0] == [
+        "№", "Время", "Поручение", "Исполнитель", "Регион", "Срок", "Кто сказал", "Цитата"
+    ]
     assert rows[1][1] == "01:05:30"
-    assert "подготовьте план" in rows[1][6]
+    assert "подготовьте план" in rows[1][7]
 
 
 def test_task_without_a_place_shows_a_dash_not_a_crash():
@@ -206,3 +208,24 @@ def test_protocol_names_the_model_among_its_details():
 
     assert "**Распознано:** модель large-v3" in document
     assert protocol.fields()["model"] == "large-v3"
+
+
+def test_a_task_with_only_a_region_is_work_not_a_question():
+    """Регион — не исполнитель, но и не тупик.
+
+    Исполнителя называют вслух, регион берётся из хода совещания. Зато по
+    региону ответственного находят в своём списке, и поручение уходит в
+    работу, а не в раздел «требуют уточнения».
+    """
+    tasks = [
+        Task("Подтвердить срок ввода", region="Архангельская область"),
+        Task("Организовать фотоотчёт"),
+    ]
+    protocol = Protocol(tasks=tasks)
+
+    assert [t.what for t in protocol.actionable] == ["Подтвердить срок ввода"]
+    assert [t.what for t in protocol.needs_clarification] == ["Организовать фотоотчёт"]
+
+    text = protocol.as_markdown()
+    assert "| Архангельская область |" in text
+    assert "ни исполнитель, ни регион не названы" in text

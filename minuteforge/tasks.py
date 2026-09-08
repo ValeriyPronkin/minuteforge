@@ -170,6 +170,11 @@ class Task:
     context: str = ""
     #: Кто это сказал.
     said_by: str = ""
+    #: Чей вопрос разбирали, когда это прозвучало. Не то же самое, что
+    #: исполнитель: исполнителя называют вслух, а регион берётся из хода
+    #: совещания. Но по региону ответственного находят по своему списку, и
+    #: пустая графа исполнителя перестаёт быть тупиком.
+    region: str = ""
 
     @property
     def key(self) -> str:
@@ -1006,6 +1011,7 @@ def attach_source(tasks: list[Task], chunk: Chunk) -> list[Task]:
             quote=found.quote if found else "",
             context=found.context if found else "",
             said_by=found.said_by if found else "",
+            region=task.region,
         ))
     return attached
 
@@ -1314,6 +1320,7 @@ def _merge_group(tasks: list[Task], indexes: list[int]) -> Task:
         quote=next((t.quote for t in group if t.quote), ""),
         context=next((t.context for t in group if t.context), ""),
         said_by=next((t.said_by for t in group if t.said_by), ""),
+        region=next((t.region for t in group if t.region), ""),
     )
 
 
@@ -1495,6 +1502,7 @@ def dedupe(tasks: Iterable[Task]) -> list[Task]:
             quote=old_task.quote or task.quote,
             context=old_task.context or task.context,
             said_by=old_task.said_by or task.said_by,
+            region=old_task.region or task.region,
         )
     return kept
 

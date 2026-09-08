@@ -14,12 +14,13 @@ import json
 import re
 import time
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable, Sequence
 
 from loguru import logger
 
 from .blocks import UNKNOWN, is_soundcheck
+from .people import is_given_name
 from .chunking import Chunk
 from .llm import LLMClient, LLMError
 from .progress import Progress, Step, report
@@ -440,6 +441,102 @@ def clean_assignee(who: str, source: str) -> str:
     return who
 
 
+#: С чего фраза начинается прежде обращения: «Так, коллеги…», «И, Андрей
+#: Николаевич, прошу…». Присказку пропускаем, обращение ищем за ней.
+_BEFORE_ADDRESS = frozenset("""
+и а ну так вот но да значит поэтому пожалуйста хорошо тогда сейчас теперь
+уважаемые уважаемый уважаемая коллега
+""".split())
+
+#: Обращение по имени-отчеству: «Сергей Анатольевич, подготовьте».
+_BY_PATRONYMIC = re.compile(
+    r"^([А-ЯЁ][а-яё]{2,})\s+([А-ЯЁ][а-яё]+(?:ович|евич|овна|евна|ична))\b"
+)
+
+#: Обращение к региону: «Коллеги Ростовской области, просьба подтвердить»,
+#: «Ставропольский край, начинайте». Так на штабе обращаются чаще, чем по
+#: фамилии: за регион отвечает не человек, а администрация.
+_BY_REGION = re.compile(
+    r"^(?:коллеги\s+|администрация\s+|город\s+)?"
+    r"([А-ЯЁ][а-яё]+(?:ой|ая|ий|ый|ая)?\s+"
+    r"(?:области|область|края|край|республики|республика|округа|округ))\b",
+    re.IGNORECASE,
+)
+
+#: Обращение по имени с фамилией: «Светлана Дина, просьба обозначить срок».
+#: Первое слово проверяется по святцам — иначе «Принято, продолжаем» тоже
+#: сойдёт за обращение.
+_BY_GIVEN_NAME = re.compile(r"^([А-ЯЁ][а-яё]{2,})(?:\s+([А-ЯЁ][а-яё]{2,}))?\s*,")
+
+#: Обращение к залу целиком: «Коллеги, обеспечьте вывоз».
+_BY_ROOM = re.compile(r"^(коллеги|уважаемые\s+коллеги|регионы|субъекты)\b", re.IGNORECASE)
+
+
+def addressee(sentence: str) -> str:
+    """Кому сказано — по обращению в начале фразы.
+
+    Поручение почти всегда открывается адресатом: «Светлана Дина, просьба
+    обозначить срок», «Коллеги Ростовской области, прошу подтвердить»,
+    «Ессентуки, дайте оценку». Модель это поле почти не заполняет — из
+    семидесяти двух поручений исполнитель стоял у шестнадцати, — а в самой
+    реплике адресат назван, и брать его оттуда правилам по силам.
+
+    Ищется только в начале фразы, и это намеренно: имя, названное в
+    середине, чаще всего принадлежит не тому, кому поручают, а тому, о ком
+    говорят. Неверный адресат хуже пустого — пустой заставляет уточнить
+    перед рассылкой, неверный уходит в рассылку как есть.
+    """
+    head = _without_filler(sentence)
+    if not head:
+        return ""
+    by_name = _BY_PATRONYMIC.match(head)
+    if by_name:
+        return f"{by_name.group(1)} {by_name.group(2)}"
+    by_region = _BY_REGION.match(head)
+    if by_region:
+        return " ".join(by_region.group(1).split())
+    by_room = _BY_ROOM.match(head)
+    if by_room:
+        return COLLECTIVE.get(by_room.group(1).lower(), "")
+    by_given = _BY_GIVEN_NAME.match(head)
+    if by_given and is_given_name(by_given.group(1).lower()):
+        return " ".join(part for part in by_given.groups() if part)
+    return ""
+
+
+def _without_filler(sentence: str) -> str:
+    """Отрезает присказку перед обращением, не трогая самого обращения."""
+    words = (sentence or "").strip().split()
+    while words and words[0].strip(",.!?…").lower() in _BEFORE_ADDRESS:
+        # «Коллеги Ростовской области» — обращение, а не присказка: слово
+        # уходит, только если за ним запятая или ещё одна присказка.
+        if words[0].strip(",.!?…").lower() in ("уважаемые", "уважаемый", "коллега"):
+            words = words[1:]
+            continue
+        if not words[0].endswith((",", ".", "!", "?", "…")):
+            break
+        words = words[1:]
+    return " ".join(words)
+
+
+def with_addressee(tasks: Sequence[Task]) -> list[Task]:
+    """Дописывает исполнителя из обращения там, где модель его не назвала.
+
+    Своё модель не переписывает: сказанное ею проверено по стенограмме и
+    точнее — она видит всю фразу, а правило только её начало.
+    """
+    filled = []
+    for task in tasks:
+        if task.who or not task.quote:
+            filled.append(task)
+            continue
+        # Ищем и в цитате, и в куске: обращение бывает фразой раньше —
+        # «Коллеги Ростовской области. Просьба подтвердить срок ввода».
+        found = addressee(task.quote) or addressee(task.context)
+        filled.append(replace(task, who=found) if found else task)
+    return filled
+
+
 #: Слова, которыми на совещании поручают. Список закрытый и составлен по
 #: живым записям: повелительное наклонение по-русски не отличить от
 #: изъявительного одним правилом — «покажите» и «видите» устроены одинаково,
@@ -833,8 +930,16 @@ def extract_tasks(
     single = one_per_place(heard)
     if len(single) != len(heard):
         logger.info("Склеено по месту разговора: {}", len(heard) - len(single))
+    named = with_addressee(single)
+    added = sum(1 for was, now in zip(single, named) if not was.who and now.who)
+    if added:
+        logger.info("Исполнитель взят из обращения: {} поручений", added)
+    single = named
     if settings is not None and getattr(settings, "merge_similar", False) and single:
         single = merge_similar(single, client, json_mode=bool(json_mode))
+    if settings is not None and getattr(settings, "verify_tasks", False) and single:
+        report(progress, Step(name="verify", title="Проверяю поручения", share=1.0))
+        single = verify(single, client, json_mode=bool(json_mode))
     return single
 
 
@@ -1184,6 +1289,121 @@ def _merge_group(tasks: list[Task], indexes: list[int]) -> Task:
         context=next((t.context for t in group if t.context), ""),
         said_by=next((t.said_by for t in group if t.said_by), ""),
     )
+
+
+VERIFY_SYSTEM = """Ты — секретарь совещания. Тебе дан кусок стенограммы и выписанный
+из него пункт. Реши одно: поручение это или нет.
+
+Поручение — когда на совещании кому-то велели что-то сделать: «подготовьте»,
+«прошу подтвердить», «обеспечьте», «доложите».
+
+Не поручение:
+— изложение доклада и пересказ норм: «отходы должны накапливаться раздельно»,
+  «регионы обязаны утвердить порядок» — это рассказ о правилах, а не задание;
+— рассуждение, мнение, оценка: «работа организована системно»;
+— вопрос ради сведений: «какая готовность объекта?»;
+— ведение совещания: «переходим к следующему вопросу», «слово Иванову»;
+— обрывок распознавания, в котором нет смысла.
+
+Отвечай строго так, без единого слова вокруг:
+
+{"order": true}
+
+или
+
+{"order": false}"""
+
+#: Схема ответа проверяющего. Одно поле: мелкая модель, которой дали
+#: свободу, вместо решения пересказывает кусок стенограммы.
+VERDICT_SCHEMA = {
+    "type": "object",
+    "properties": {"order": {"type": "boolean"}},
+    "required": ["order"],
+    "additionalProperties": False,
+}
+
+#: Сколько списку позволено ужаться на проверке. Мелкая модель, не поняв
+#: задачи, отвечает «нет» подряд, и протокол выходит пустым — а пустой
+#: протокол выглядит так, будто на совещании ничего не поручали.
+VERIFY_FLOOR = 0.3
+
+
+def verify(
+    tasks: Sequence[Task],
+    client: LLMClient,
+    *,
+    json_mode: bool = True,
+) -> list[Task]:
+    """Спрашивает модель по каждому пункту: поручение это или доклад.
+
+    Правилами это уже не отделить. «Интересные нормы касаются того, в каком
+    виде отходы должны выноситься на площадки» — изложение чужого документа,
+    а «должны» в нём неотличимо от требования; такие пункты и составляют
+    теперь основной мусор.
+
+    Спрашивается по одному и коротко: вопрос «да или нет» о куске в сотню
+    токенов мелкая модель решает заметно надёжнее, чем выписывает поручения
+    из куска в четыре тысячи. Отвечать ей позволено ровно одним полем.
+
+    Сбой запроса — пункт остаётся: молчание сервера не повод вычеркнуть
+    поручение.
+    """
+    if not tasks:
+        return list(tasks)
+
+    kept: list[Task] = []
+    dropped: list[Task] = []
+    for task in tasks:
+        source = task.context or task.quote
+        if not source:
+            kept.append(task)
+            continue
+        question = f"Кусок стенограммы:\n{source}\n\nВыписанный пункт: {task.what}"
+        try:
+            reply = client.complete(
+                VERIFY_SYSTEM, question,
+                json_mode=json_mode,
+                schema=VERDICT_SCHEMA if json_mode else None,
+            )
+        except LLMError as exc:
+            logger.warning("Проверка пункта не удалась, оставляю: {}", exc)
+            kept.append(task)
+            continue
+        (dropped if _said_no(reply.text) else kept).append(task)
+
+    if len(kept) < len(tasks) * VERIFY_FLOOR:
+        logger.warning(
+            "Проверка отвергнута: из {} поручений уцелело бы {}. Столько "
+            "мусора в списке не бывает — похоже, модель не поняла вопроса. "
+            "Оставляю список как есть.",
+            len(tasks), len(kept),
+        )
+        return list(tasks)
+
+    for task in dropped:
+        logger.info("Отсеяно проверкой как не поручение: {}", task.what[:80])
+    if dropped:
+        logger.info("Проверка сняла {} из {}", len(dropped), len(tasks))
+    return kept
+
+
+def _said_no(answer: str) -> bool:
+    """Ответила ли модель «это не поручение».
+
+    Разбор снисходительный ко всему, кроме сути: ответ может приехать
+    словом, а не JSON. Непонятый ответ считается согласием — вычёркивать
+    поручение из-за того, что мы не разобрали ответ, нельзя.
+    """
+    text = (answer or "").strip().lower()
+    if not text:
+        return False
+    try:
+        body = json.loads(text[text.find("{") : text.rfind("}") + 1])
+    except ValueError:
+        body = None
+    if isinstance(body, dict) and "order" in body:
+        return body["order"] is False
+    return text.startswith(("нет", "false", "no"))
 
 
 #: Насколько два поручения должны совпасть словами, чтобы считаться одним.

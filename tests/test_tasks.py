@@ -955,3 +955,96 @@ def test_the_roll_call_asking_to_confirm_the_line_is_not_an_order():
     assert not worth_showing("Коллеги, просьба проверить микрофон.")
     assert worth_showing("Коллеги Ростовской области, просьба подтвердите срок ввода.")
     assert worth_showing("Слышно. Иванов, подготовьте справку.")
+
+
+def test_the_addressee_is_taken_from_the_start_of_the_phrase():
+    """Поручение открывается адресатом, и модель его почти не выписывает.
+
+    Из семидесяти двух поручений исполнитель стоял у шестнадцати, хотя в
+    самой реплике адресат назван.
+    """
+    from minuteforge.tasks import addressee
+
+    assert addressee("Светлана Дина, просьба обозначить срок ввода.") == "Светлана Дина"
+    assert addressee("Эмир Нурдинович, подтвердите наличие воды.") == "Эмир Нурдинович"
+    assert addressee("Так, Ирина Анатольевна, пригласите их на совещание.") == "Ирина Анатольевна"
+    assert addressee("Коллеги Ростовской области, просьба подтвердите срок.") == "Ростовской области"
+    assert addressee("Коллеги, просьба подтвердить объекты.") == "все участники"
+
+
+def test_a_name_in_the_middle_is_not_an_addressee():
+    """Имя в середине фразы — чаще о ком говорят, чем кому поручают.
+
+    Неверный адресат хуже пустого: пустой заставляет уточнить перед
+    рассылкой, неверный уходит в рассылку как есть.
+    """
+    from minuteforge.tasks import addressee
+
+    assert addressee("Принято, продолжаем дальше.") == ""
+    assert addressee("Организуйте сейчас фотоотчет, вот прямо сейчас.") == ""
+    assert addressee("По докладам, которые Евгений Александрович предоставляет, видно.") == ""
+
+
+def test_the_model_keeps_its_own_assignee():
+    """Своё модель не переписывает: она видит всю фразу, правило — начало."""
+    from minuteforge.tasks import Task, with_addressee
+
+    tasks = [
+        Task(what="Подтвердить срок", quote="Светлана Дина, просьба подтвердить срок."),
+        Task(what="Подтвердить срок", who="Ростовская область",
+             quote="Светлана Дина, просьба подтвердить срок."),
+    ]
+    filled = with_addressee(tasks)
+
+    assert filled[0].who == "Светлана Дина"
+    assert filled[1].who == "Ростовская область"
+
+
+def test_the_check_drops_a_report_retold_as_an_order():
+    """Правилами доклад от поручения уже не отличить — спрашиваем модель."""
+    from minuteforge.llm import Reply
+    from minuteforge.tasks import Task, verify
+
+    class Judge:
+        def complete(self, system, user, **kwargs):
+            return Reply(text='{"order": false}' if "отходы" in user else '{"order": true}')
+
+    kept = verify([
+        Task(what="Подготовить справку", quote="Подготовьте справку.", context="Подготовьте справку."),
+        Task(what="Накапливать отходы раздельно", quote="Отходы должны накапливаться раздельно.",
+             context="Отходы должны накапливаться раздельно."),
+        Task(what="Проверить площадки", quote="Проверьте площадки.", context="Проверьте площадки."),
+    ], Judge())
+
+    assert [t.what for t in kept] == ["Подготовить справку", "Проверить площадки"]
+
+
+def test_a_check_that_drops_everything_is_not_believed():
+    """Мелкая модель, не поняв вопроса, отвечает «нет» подряд.
+
+    Пустой протокол выглядит так, будто на совещании ничего не поручали, —
+    и заметить подмену нельзя.
+    """
+    from minuteforge.llm import Reply
+    from minuteforge.tasks import Task, verify
+
+    class AlwaysNo:
+        def complete(self, system, user, **kwargs):
+            return Reply(text='{"order": false}')
+
+    tasks = [Task(what=f"Поручение {i}", quote="Подготовьте.", context="Подготовьте.")
+             for i in range(5)]
+
+    assert verify(tasks, AlwaysNo()) == tasks
+
+
+def test_a_silent_server_does_not_cost_an_order():
+    from minuteforge.llm import LLMError
+    from minuteforge.tasks import Task, verify
+
+    class Silent:
+        def complete(self, system, user, **kwargs):
+            raise LLMError("сервер не ответил")
+
+    tasks = [Task(what="Подготовить справку", quote="Подготовьте.", context="Подготовьте.")]
+    assert verify(tasks, Silent()) == tasks

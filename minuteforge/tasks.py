@@ -461,6 +461,14 @@ DIRECTIVE_WORDS = frozenset("""
 #: «направляйте» — и ни одного «видите» в придачу.
 _IMPERATIVE_TAIL = "йте"
 
+#: Кроме приветствий: они устроены точно так же. «Здравствуйте, как слышно?»
+#: кончается на «-йте» неотличимо от «зафиксируйте», и на записи штаба, где
+#: подключаются тридцать регионов, таких реплик полторы сотни — половина
+#: стенограммы. Ни одна из них ничего не поручает.
+_NOT_A_DIRECTIVE_TAIL = frozenset("""
+здравствуйте извините простите подскажите послушайте подождите погодите
+""".split())
+
 #: Прошедшее время сразу за словом требования переводит его в упрёк.
 _PAST = frozenset("был была были было".split())
 
@@ -535,7 +543,12 @@ def is_directive(sentence: str) -> bool:
         if words[position + 1:position + 2] and words[position + 1] in _PAST:
             continue
         return True
-    return any(len(word) > 4 and word.endswith(_IMPERATIVE_TAIL) for word in words)
+    return any(
+        len(word) > 4
+        and word.endswith(_IMPERATIVE_TAIL)
+        and word not in _NOT_A_DIRECTIVE_TAIL
+        for word in words
+    )
 
 
 def keep_directives(tasks: Iterable[Task]) -> list[Task]:

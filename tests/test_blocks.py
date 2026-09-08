@@ -199,23 +199,70 @@ def test_business_speech_is_not_mistaken_for_soundcheck():
     )
 
 
-def test_only_the_opening_roll_call_is_cut():
-    """«Нас слышно?» посреди доклада — уже часть совещания, и выкидывать её
-    нельзя: режем только начало, до первой настоящей реплики."""
+def test_roll_call_is_cut_wherever_it_sounds():
+    """Перекличка не кончается в начале записи.
+
+    На штабе регионы подключаются все три часа, и «как нас видно, слышно»
+    звучит на третьем часу так же, как на первой минуте. Пока резалось
+    только начало, из 169 таких реплик уходило ноль.
+    """
     from minuteforge.blocks import drop_soundcheck
 
     blocks = [
         Block("SPEAKER_01", "Добрый день, как слышно, видно?", 0, 5),
         Block("SPEAKER_02", "Да, видим, слышим.", 5, 8),
         Block("SPEAKER_03", "Коллеги, начинаем заседание, повестка из четырёх вопросов.", 10, 60),
-        Block("SPEAKER_04", "Прошу прощения, меня слышно?", 60, 63),
-        Block("SPEAKER_03", "Да. Продолжайте доклад.", 63, 70),
+        Block("SPEAKER_04", "Здравствуйте, Омская область, нас видно?", 3600, 3605),
+        Block("SPEAKER_03", "Да. Продолжайте доклад.", 3605, 3610),
+    ]
+    kept, skipped = drop_soundcheck(blocks)
+
+    assert skipped == 3
+    assert [b.text for b in kept] == [
+        "Коллеги, начинаем заседание, повестка из четырёх вопросов.",
+        "Да. Продолжайте доклад.",
+    ]
+
+
+def test_the_roll_call_filter_survives_a_bad_opening():
+    """Запись открывается мусором распознавания — и раньше этого хватало.
+
+    «КРИЧИТ Я не знаю. Я не знаю» на живой записи стояло первой репликой:
+    цепочка от начала обрывалась о неё, и полтора часа переклички уезжали
+    в модель целиком. Теперь начало записи ни при чём.
+    """
+    from minuteforge.blocks import drop_soundcheck
+
+    blocks = [
+        Block("SPEAKER_17", "КРИЧИТ Я не знаю. Я не знаю. Я не знаю.", 0, 37),
+        Block("SPEAKER_06", "Добрый день, как видно, слышно Санкт-Петербург?", 40, 45),
+        Block("SPEAKER_14", "Добрый день, видим, слышим, хорошо.", 45, 50),
+        Block("SPEAKER_02", "Коллеги, начинаем. Повестка из четырёх вопросов.", 60, 120),
     ]
     kept, skipped = drop_soundcheck(blocks)
 
     assert skipped == 2
-    assert len(kept) == 3
-    assert "слышно" in kept[1].text, "перекличка внутри совещания остаётся"
+    assert len(kept) == 2, "мусор в начале остаётся, перекличка за ним — нет"
+
+
+def test_an_order_inside_the_roll_call_is_not_lost():
+    """Перекличка бывает пополам с работой, и работа важнее.
+
+    «Слышно. Иванов, подготовьте справку» сказано одной репликой: похожа
+    на перекличку, а поручение в ней настоящее. Проверку передаёт тот, кто
+    вызывает, — сам модуль про поручения ничего не знает.
+    """
+    from minuteforge.blocks import drop_soundcheck
+    from minuteforge.tasks import is_directive
+
+    blocks = [
+        Block("SPEAKER_01", "Добрый день, как слышно, видно?", 0, 5),
+        Block("SPEAKER_02", "Слышно. Иванов, подготовьте справку.", 5, 10),
+    ]
+    kept, skipped = drop_soundcheck(blocks, keep=is_directive)
+
+    assert skipped == 1
+    assert kept[0].text.startswith("Слышно. Иванов")
 
 
 def test_meeting_without_a_roll_call_is_untouched():
@@ -226,10 +273,14 @@ def test_meeting_without_a_roll_call_is_untouched():
     assert skipped == 0 and kept == blocks
 
 
-def test_greetings_inside_the_roll_call_do_not_stop_the_filter():
-    """Посреди часовой переклички то и дело мелькает «Здравствуйте!», где нет
-    ни «слышно», ни «видно». Останавливаясь на первой такой, фильтр срезал
-    шесть реплик вместо полутора сотен."""
+def test_a_bare_greeting_is_not_taken_for_a_roll_call():
+    """«Здравствуйте!» без «слышно» и «видно» — не перекличка.
+
+    Раньше это было важно: короткое приветствие не должно было прерывать
+    цепочку. Теперь цепочки нет, и правило отвечает само за себя — двух
+    слов приветствия в куске не жалко, а вот выбросить по такому признаку
+    «Здравствуйте, начинаем» было бы уже потерей.
+    """
     from minuteforge.blocks import drop_soundcheck
 
     blocks = (
@@ -242,5 +293,5 @@ def test_greetings_inside_the_roll_call_do_not_stop_the_filter():
     )
     kept, dropped = drop_soundcheck(blocks)
 
-    assert dropped == 12, "перекличка уходит целиком, короткие приветствия её не прерывают"
-    assert kept[0].text.startswith("Начинаем заседание")
+    assert dropped == 11, "уходит перекличка, приветствие остаётся"
+    assert [b.text for b in kept][0] == "Здравствуйте!"

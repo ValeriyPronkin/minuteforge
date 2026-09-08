@@ -792,6 +792,23 @@ def test_a_statement_is_not_an_order():
     assert is_directive("Штаб должен начать работать по-другому.")
 
 
+def test_a_greeting_is_not_an_imperative():
+    """«Здравствуйте» кончается на «-йте» так же, как «зафиксируйте».
+
+    Пока хвостовое правило этого не различало, вся перекличка штаба —
+    полторы сотни реплик «здравствуйте, как видно, слышно» — считалась
+    поручениями.
+    """
+    from minuteforge.tasks import is_directive
+
+    assert not is_directive("Здравствуйте, Ленинградская область. Как нас видно, слышно?")
+    assert not is_directive("Извините, повторите вопрос.")
+    assert not is_directive("Подскажите, как слышно?")
+    assert is_directive("Здравствуйте. Зафиксируйте это в протоколе."), (
+        "приветствие рядом с поручением поручения не отменяет"
+    )
+
+
 def test_a_reproach_in_the_past_is_not_an_order():
     """«Должен был принять и рассчитаться» — упрёк за несделанное."""
     from minuteforge.tasks import is_directive

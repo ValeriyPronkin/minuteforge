@@ -34,7 +34,7 @@ from .config import Settings
 from .llm import LLMClient
 from .people import Person
 from .protocol import Protocol, build_protocol
-from .tasks import extract_tasks
+from .tasks import extract_tasks, is_directive
 from .transcribe import (
     STEP_TITLES,
     RecognitionError,
@@ -212,9 +212,16 @@ def protocol_from_transcript(
     # остаётся полной. Расшифровка должна быть точной — что прозвучало, то и
     # записано; отбирать, чему место в документе, а чему нет, дело того, кто
     # ведёт протокол, а не инструмента.
-    for_model, skipped = drop_soundcheck(blocks) if settings.drop_soundcheck else (blocks, 0)
+    #
+    # Реплика, в которой поручение слышно, остаётся, даже если похожа на
+    # перекличку: «Слышно. Иванов, подготовьте справку» сказано вперемешку,
+    # и терять вторую половину из-за первой нельзя.
+    for_model, skipped = (
+        drop_soundcheck(blocks, keep=is_directive)
+        if settings.drop_soundcheck else (blocks, 0)
+    )
     if skipped:
-        logger.info("Перекличка в начале записи пропущена: {} реплик", skipped)
+        logger.info("Перекличка пропущена: {} реплик из {}", skipped, len(blocks))
 
     chunks = split_into_chunks(
         for_model,

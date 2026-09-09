@@ -28,6 +28,14 @@ def test_budget_never_collapses_to_nothing():
     assert Settings(llm_context_tokens=10).chunk_budget == 500
 
 
+def test_the_biggest_whisper_model_is_the_default():
+    """Ошибка расшифровки въезжает прямо в текст поручения, и там её уже не
+    видно. Память кончится — расчёт сам спустится на модель поменьше и об
+    этом скажет, так что цена умолчания — время, а не сорванный прогон."""
+    assert Settings().asr_model == "large-v3"
+    assert Settings.load("config.example.yaml").asr_model == "large-v3"
+
+
 def test_token_is_read_only_from_the_environment(monkeypatch):
     monkeypatch.delenv(HF_TOKEN_ENV, raising=False)
     assert Settings().hf_token is None

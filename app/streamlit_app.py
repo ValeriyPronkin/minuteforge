@@ -314,12 +314,20 @@ with st.sidebar:
             )
 
     st.header("Распознавание")
+    # Что выбрано по умолчанию, решает config.yaml, а не число здесь: иначе
+    # настройка в файле и настройка в интерфейсе расходятся, и человек не
+    # понимает, какая из них считает.
+    ASR_MODELS = ["tiny", "base", "small", "medium", "large-v3"]
+    default_model = BASE.asr_model if BASE.asr_model in ASR_MODELS else "large-v3"
     asr_model = st.selectbox(
         "Модель Whisper",
-        ["tiny", "base", "small", "medium", "large-v3"],
-        index=3,
-        help="Крупнее — точнее и заметно дольше. На записи с плохим микрофоном "
-        "разница между small и medium решающая.",
+        ASR_MODELS,
+        index=ASR_MODELS.index(default_model),
+        help="Крупнее — точнее и заметно дольше. По умолчанию large-v3: она "
+        "разбирает фамилии и цифры, на которых medium ошибается, а ошибка "
+        "расшифровки въезжает прямо в текст поручения. Просит около 5 ГБ "
+        "видеопамяти; не хватит — расчёт сам спустится на модель поменьше и "
+        "скажет об этом.",
     )
     language = st.text_input("Язык записи", BASE.language)
     speakers = st.number_input(

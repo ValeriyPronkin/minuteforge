@@ -34,6 +34,7 @@ from .config import Settings
 from . import dates
 from .directory import read_directory, at as unit_at
 from .journal import Journal
+from .vocabulary import read_vocabulary
 from .llm import LLMClient
 from .people import Person
 from .protocol import Protocol, build_protocol
@@ -41,6 +42,7 @@ from .tasks import (
     COLLECTIVE_NAMES,
     asks_for_work,
     extract_tasks,
+    use_words,
     most_addressed,
     worth_showing,
 )
@@ -256,6 +258,11 @@ def protocol_from_transcript(
     settings = settings or Settings()
     meeting = meeting or Meeting()
     client = client or LLMClient(settings)
+
+    # Свои слова — до первого обращения к правилу: по нему собираются окна,
+    # и словарь, применённый позже, на отбор уже не повлияет.
+    own_words = read_vocabulary(settings.words_file)
+    use_words(own_words.orders, own_words.not_orders)
 
     blocks = transcript.blocks
     if meeting.names:

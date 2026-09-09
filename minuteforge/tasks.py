@@ -727,6 +727,7 @@ DIRECTIVE_WORDS = frozenset("""
 ждём ждем давайте пожалуйста
 
 предлагаю предлагаем предлагается поручаем рекомендую рекомендуем
+желательно обращаю обращаем
 
 обеспечьте подготовьте направьте доложите доложить представьте примите
 проверьте проконтролируйте организуйте пригласите назовите подтвердите
@@ -736,6 +737,32 @@ DIRECTIVE_WORDS = frozenset("""
 начните займитесь доработайте рассмотрите изучите учтите выделите закупите
 приобретите исправьте устраните берите езжайте побывайте разошлите
 """.split())
+
+#: Свои слова поверх встроенных: чем поручают именно у вас и что у вас
+#: поручением не считается. Заводятся один раз на прогон — :func:`use_words`
+#: вызывается перед разбором, — потому что правило спрашивают из десятка
+#: мест, и протаскивать словарь через каждое значило бы переписать половину
+#: модуля ради настройки, которой у большинства нет.
+_EXTRA_ORDERS: frozenset[str] = frozenset()
+_EXTRA_NOT_ORDERS: frozenset[str] = frozenset()
+
+
+def use_words(orders=(), not_orders=()) -> None:
+    """Добавляет свои слова к встроенным на время разбора.
+
+    «Не поручают» сильнее: слово оттуда не сделает фразу поручением, даже
+    если оно похоже на повелительное наклонение. Так и задумано — лишний
+    пункт уходит в рассылку, а пропущенный виден в стенограмме.
+    """
+    global _EXTRA_ORDERS, _EXTRA_NOT_ORDERS
+    _EXTRA_ORDERS = frozenset(word.lower() for word in orders)
+    _EXTRA_NOT_ORDERS = frozenset(word.lower() for word in not_orders)
+
+
+def forget_words() -> None:
+    """Возвращает встроенный список. Нужно между разборами и в проверках."""
+    use_words()
+
 
 #: Присказка, а не поручение. «Да, смотрите, я им пока покажу», «давайте
 #: сэкономим время» — этим ничего не поручают, а по правилу они проходили
@@ -829,8 +856,9 @@ def is_directive(sentence: str) -> bool:
     words = re.findall(r"\w+", (sentence or "").lower())
     if _conditional(words) or _agenda(words):
         return False
+    ordering = (DIRECTIVE_WORDS | _EXTRA_ORDERS) - _EXTRA_NOT_ORDERS
     for position, word in enumerate(words):
-        if word not in DIRECTIVE_WORDS or word in _FILLER_DIRECTIVES:
+        if word not in ordering or word in _FILLER_DIRECTIVES:
             continue
         # «Должен был принять и рассчитаться» — упрёк за несделанное, а не
         # поручение сделать. В прошедшем времени поручений не дают.
@@ -841,6 +869,7 @@ def is_directive(sentence: str) -> bool:
         len(word) > 4
         and word.endswith(_IMPERATIVE_TAIL)
         and word not in _NOT_A_DIRECTIVE_TAIL
+        and word not in _EXTRA_NOT_ORDERS
         for word in words
     )
 
@@ -874,8 +903,9 @@ def asks_for_work(text: str) -> bool:
     words = re.findall(r"\w+", (text or "").lower())
     if not is_directive(text):
         return False
-    empty = _POLITENESS | _ABOUT_THE_LINK
-    if any(word in DIRECTIVE_WORDS and word not in empty for word in words):
+    empty = _POLITENESS | _ABOUT_THE_LINK | _EXTRA_NOT_ORDERS
+    ordering = DIRECTIVE_WORDS | _EXTRA_ORDERS
+    if any(word in ordering and word not in empty for word in words):
         return True
     return any(
         len(word) > 4
@@ -928,6 +958,35 @@ def keep_meaningful(tasks: Iterable[Task]) -> list[Task]:
     ]
 
 
+def _action(what: str) -> str:
+    """Основа первого значащего слова поручения — обычно это глагол."""
+    words = re.findall(r"\w{5,}", (what or "").lower())
+    return words[0][:6] if words else ""
+
+
+def ordered_nearby(task: Task) -> bool:
+    """Велено ли соседней фразой то, что выписано из этой.
+
+    Цитата выбирается по совпадению слов, и у пункта «Завершить работы по
+    наружным сетям» ею стала фраза доклада «вы отстаете по наружным сетям и
+    по благоустройству» — слов в ней больше. А велено было соседней:
+    «Завершайте быстрее». Отсев смотрел на цитату и снимал настоящее
+    поручение.
+
+    Проверка узкая намеренно: мало того, что рядом стоит повелительное
+    наклонение, — в нём должно стоять то же действие, что и в пункте. Иначе
+    любой пункт спасался бы соседним поручением о другом: окна собираются
+    вокруг таких фраз, и рядом они почти всегда.
+    """
+    action = _action(task.what)
+    if not action or not task.context:
+        return False
+    return any(
+        is_directive(sentence) and action in _significant(sentence)
+        for sentence in _sentences(task.context)
+    )
+
+
 def keep_directives(tasks: Iterable[Task]) -> list[Task]:
     """Оставляет поручения, которые слышны в реплике-источнике.
 
@@ -942,7 +1001,10 @@ def keep_directives(tasks: Iterable[Task]) -> list[Task]:
     """
     return [
         task for task in tasks
-        if not task.quote or is_directive(task.quote) or due_point(task.quote)
+        if not task.quote
+        or is_directive(task.quote)
+        or due_point(task.quote)
+        or ordered_nearby(task)
     ]
 
 
@@ -1738,6 +1800,13 @@ def verify(
     for task in tasks:
         source = task.context or task.quote
         if not source:
+            kept.append(task)
+            continue
+        if due_point(task.due):
+            # Названный день ставят поручению, а не докладу. Проверка на
+            # живой записи сняла «принять информацию через неделю на
+            # контроль» и «провести обсуждение через две недели» — то есть
+            # ровно те пункты, ради которых графа сроков и заведена.
             kept.append(task)
             continue
         question = f"Кусок стенограммы:\n{source}\n\nВыписанный пункт: {task.what}"

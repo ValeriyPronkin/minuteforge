@@ -1353,3 +1353,72 @@ def test_a_named_day_saves_a_task_from_the_sieve_but_a_cadence_does_not():
 
     assert keep_directives([named]) == [named]
     assert keep_directives([cadence]) == []
+
+
+def test_a_softly_worded_requirement_is_still_a_directive():
+    """«Обращаю внимание региона на планы по строительству площадок» и
+    «желательно, чтобы штаб проводил лично губернатор» — так поручают на
+    совещании чаще, чем «обеспечьте»."""
+    from minuteforge.tasks import is_directive
+
+    assert is_directive("Отдельно обращаю внимание региона на планы по площадкам.")
+    assert is_directive("Особо обращаем внимание на финансирование, которое заявлено.")
+    assert is_directive("И желательно, чтобы штаб проводил лично руководитель.")
+
+
+def test_a_task_ordered_by_the_neighbouring_phrase_survives():
+    """Цитата выбирается по совпадению слов, и ею становится фраза доклада —
+    слов в ней больше. А велено соседней. Отсев смотрел на цитату и снимал
+    настоящее поручение."""
+    from minuteforge.tasks import is_directive, keep_directives, ordered_nearby
+
+    task = Task(
+        what="Завершить работы по наружным сетям и благоустройству",
+        quote="Я так понимаю, вы отстаете по наружным сетям и по благоустройству.",
+        context="Мы видим красивый объект. Я так понимаю, вы отстаете по наружным "
+        "сетям и по благоустройству. Завершайте быстрее.",
+    )
+    assert not is_directive(task.quote), "сама цитата поручением не звучит"
+    assert ordered_nearby(task)
+    assert keep_directives([task]) == [task]
+
+
+def test_someone_elses_order_nearby_does_not_save_a_report():
+    """Проверка узкая: рядом должно стоять то же действие, что в пункте.
+    Иначе любой пункт спасался бы соседним поручением о другом — окна
+    собираются вокруг таких фраз, и рядом они почти всегда."""
+    from minuteforge.tasks import keep_directives, ordered_nearby
+
+    report = Task(
+        what="Проанализировать показатели мощности",
+        quote="Видим показатели мощности.",
+        context="Видим показатели мощности. Завершайте быстрее.",
+    )
+    assert not ordered_nearby(report)
+    assert keep_directives([report]) == []
+
+
+def test_a_task_with_a_named_day_is_not_put_to_the_check():
+    """Названный день ставят поручению, а не докладу. На живой записи
+    проверка сняла «принять информацию через неделю на контроль» — ровно
+    тот пункт, ради которого графа сроков и заведена."""
+    from minuteforge.tasks import verify
+
+    class Refuses:
+        settings = None
+
+        def complete(self, system, user, **kwargs):
+            return Reply(text='{"order": false}')
+
+    dated = Task(what="Представить углублённый доклад", due="через неделю",
+                 quote="Информацию принимаем через неделю на контроль.",
+                 context="Информацию принимаем через неделю на контроль.")
+    plain = Task(what="Проанализировать показатели", due="",
+                 quote="Видим показатели мощности.",
+                 context="Видим показатели мощности. Дальше цифры.")
+
+    # Пунктов со сроком двое: иначе сработает защита от модели, которая
+    # отвечает «нет» подряд, и проверка отменится целиком.
+    kept = verify([dated, dated, plain, plain], Refuses())
+    assert dated in kept, "пункт со сроком проверка не трогает"
+    assert plain not in kept

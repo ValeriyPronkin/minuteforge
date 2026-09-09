@@ -722,3 +722,40 @@ def test_a_protocol_without_notes_saves_as_before(tmp_path):
     paths = save(Protocol(title="Протокол"), tmp_path, stem="протокол")
 
     assert "journal" not in paths
+
+
+def test_the_same_path_works_on_a_meeting_of_another_kind(tmp_path):
+    """Разбор не знает ни регионов, ни отрасли: справочник и слова приносит
+    организация. Здесь совещание про участки цеха — и всё то же самое
+    работает: графа заполняется, срок считается, документ собирается."""
+    справочник = tmp_path / "справочник.csv"
+    справочник.write_text(
+        "Направление;Как звучит\nЛитейный участок;литейн\n", encoding="utf-8"
+    )
+    слова = tmp_path / "слова.csv"
+    слова.write_text("поручают;отработать\n", encoding="utf-8")
+
+    workshop = Transcript([
+        Block("SPEAKER_00", "Следующий участок Литейный.", 0.0, 8.0),
+        Block("SPEAKER_01", "По литейному износ оснастки 40 процентов.", 8.0, 16.0),
+        Block("SPEAKER_00", "План замены оснастки отработать до пятницы.", 16.0, 24.0),
+    ])
+    client = FakeClient(
+        "Поручение: Отработать план замены оснастки\nКому: \nСрок: до пятницы"
+    )
+    settings = Settings(
+        directory_file=справочник,
+        directory_label="Участок",
+        words_file=слова,
+        verify_tasks=False,
+        merge_similar=False,
+    )
+    protocol = protocol_from_transcript(
+        workshop, settings, meeting=Meeting(date="07.09.2026"), client=client,
+    )
+
+    assert [t.what for t in protocol.tasks] == ["Отработать план замены оснастки"]
+    assert protocol.tasks[0].unit == "Литейный участок", "справочник свой, а работает"
+    assert protocol.tasks[0].due_date == "11.09.2026"
+    assert "| Участок |" in protocol.as_markdown()
+    assert "| Литейный участок |" in protocol.as_markdown()

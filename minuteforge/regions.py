@@ -183,6 +183,38 @@ CITIES: tuple[tuple[str, str], ...] = (
     ("Красноярск", "Красноярский край"),
 )
 
+#: Совпадение ищется с начала слова, а не где попало внутри него. Без
+#: этого «с-чит-али деньги» находило Читу, «о-казан-ия услуг» — Казань, а
+#: «Т-омск-ая область» — Омскую. Основа при этом остаётся основой: конец
+#: слова свободен, и падежи переживаются как прежде.
+#: Основа короче этого требует ещё и конца слова: «Чит» (Чита) находится
+#: внутри «читаете» и «читать», «Уф» (Уфа) — внутри «уфимский». Длинным
+#: основам это не нужно и вредно: «Ставропольского» — восемь букв сверх
+#: основы, и все законные.
+_SHORT_STEM = 5
+
+#: Сколько букв позволено сверх короткой основы. Ровно падежное окончание:
+#: «Чита», «Чите», «Читой». Больше — и «читать» снова становится Читой.
+#: Цена ровно одна: «Уфой» и «Читинской» уже не найдутся.
+_SHORT_TAIL = 2
+
+
+def _pattern(stem: str) -> re.Pattern:
+    body = re.escape(stem.lower())
+    if len(stem) < _SHORT_STEM:
+        return re.compile(
+            rf"(?<![а-яёa-z]){body}[а-яё]{{0,{_SHORT_TAIL}}}(?![а-яёa-z])"
+        )
+    return re.compile(rf"(?<![а-яёa-z]){body}")
+
+
+_STARTS = tuple(
+    (name, _pattern(stem))
+    for name, stem in
+    tuple((n, s) for n, s in SUBJECTS) + tuple((n, c.lower()) for c, n in CITIES)
+)
+
+
 #: Чем объявляют очередной регион. Список узкий намеренно: в докладе
 #: регионы называют десятками, и считать каждое упоминание сменой темы
 #: значило бы менять адресата каждые две фразы.
@@ -196,6 +228,23 @@ _HANDOVER = (
 #: докладчика посреди чужого разбора, и отзываются на перекличке. Каждое
 #: такое упоминание сбивало бы разбор на «не разобрать», и графа пустела
 #: там, где регион был назван прямо.
+
+#: Слова, которыми к региону переходят не объявляя: «Далее Иркутская
+#: область», «Начнем с Еврейской автономной области», «рассмотрим ситуацию
+#: в республике Саха Якутия». Сами по себе они ничего не значат — «и так
+#: далее», «полигоны продолжают действовать», — поэтому слабый переход
+#: считается переходом, только если регион при нём нашёлся. Не нашёлся —
+#: ничего не происходит, прежний регион остаётся.
+_WEAK_HANDOVER = (
+    "далее", "начнем с", "начнём с", "начинаем с", "рассмотрим",
+    "продолжаем", "продолжаю",
+)
+
+#: Сколько фраз вперёд искать название региона. Объявляют и называют
+#: обычно порознь: «Следующий регион.» — и уже в следующей фразе «Джамбулат
+#: Хизирович, Кисловодск». Двух хватает; дальше начинает попадаться регион,
+#: упомянутый мимоходом.
+LOOKAHEAD = 2
 
 _SENTENCES = re.compile(r"(?<=[.!?…])\s+")
 
@@ -212,21 +261,65 @@ def find_subject(text: str) -> str:
     """
     lowered = (text or "").lower()
     best: tuple[int, str] = (len(lowered) + 1, "")
-    for name, stem in SUBJECTS:
-        at = lowered.find(stem)
-        if 0 <= at < best[0]:
-            best = (at, name)
-    for city, name in CITIES:
-        at = lowered.find(city.lower())
-        if 0 <= at < best[0]:
-            best = (at, name)
+    for name, pattern in _STARTS:
+        found = pattern.search(lowered)
+        if found and found.start() < best[0]:
+            best = (found.start(), name)
     return best[1]
 
 
-def is_handover(text: str) -> bool:
-    """Похоже ли на объявление очередного региона."""
+#: О чём переходят. Без этого «переходим к фотоматериалу» и «перейдем к
+#: третьему вопросу» считались объявлением региона — и, не найдя названия,
+#: стирали регион посреди его же разбора. Стирать может только фраза, в
+#: которой о регионе речь и идёт.
+_ABOUT_A_REGION = (
+    "регион", "город", "республик", "област", "кра", "округ", "субъект",
+)
+
+#: Переход не к региону, а к другому вопросу повестки: «переходим к
+#: следующему вопросу», «перейдем к третьему вопросу». Разбор региона на
+#: этом кончается, и регион надо стереть — иначе поручения общей части
+#: достаются тому субъекту, которого разбирали до неё.
+_AWAY_FROM_REGIONS = ("вопрос", "повестк", "итог")
+
+
+def leaves_regions(text: str) -> bool:
+    """Уводит ли эта фраза с разбора регионов вообще."""
     lowered = (text or "").lower()
-    return any(word in lowered for word in _HANDOVER)
+    return (
+        any(word in lowered for word in _HANDOVER)
+        and any(word in lowered for word in _AWAY_FROM_REGIONS)
+    )
+
+
+def is_handover(text: str) -> bool:
+    """Похоже ли на объявление очередного региона.
+
+    Или на уход с регионов вовсе: переход к следующему вопросу повестки —
+    такой же конец разбора, как и объявление следующего субъекта.
+    """
+    lowered = (text or "").lower()
+    if not any(word in lowered for word in _HANDOVER):
+        return False
+    return (
+        any(word in lowered for word in _ABOUT_A_REGION)
+        or leaves_regions(text)
+        or bool(find_subject(text))
+    )
+
+
+def is_weak_handover(text: str) -> bool:
+    """Похоже ли на переход к региону без объявления.
+
+    Отличается от :func:`is_handover` тем, что сам по себе ничего не решает:
+    регион при таком переходе обязан найтись, иначе перехода не было.
+
+    Считается только в начале фразы. «И так далее» — не переход, а конец
+    перечисления, и на итоговой реплике штаба оно уводило разбор в Чувашию,
+    случайно упомянутую двумя предложениями ниже.
+    """
+    lowered = (text or "").strip().lower().lstrip("-—…,;: ")
+    return any(lowered.startswith(word) for word in _WEAK_HANDOVER)
 
 
 def follow(blocks: Sequence[object]) -> list[tuple[float, str]]:
@@ -236,24 +329,75 @@ def follow(blocks: Sequence[object]) -> list[tuple[float, str]]:
     считается идущим до следующего перехода — так штаб и устроен, регион за
     регионом.
     """
-    marks: list[tuple[float, str]] = []
+    flat: list[tuple[float, str]] = []
     for block in blocks:
         start = getattr(block, "start", None)
         if start is None:
             continue
-        for sentence in _SENTENCES.split(getattr(block, "text", "") or ""):
-            if not is_handover(sentence):
-                continue
-            subject = find_subject(sentence)
-            # Переход, в котором региона не разобрать, — тоже переход, и
-            # он стирает предыдущий. «Далее города Северо-Кавказского
-            # округа и Синтуки»: что Ессентуки, знает человек, а список
-            # видит только несовпадение. Оставить прежний регион значило бы
-            # подписать поручения Ессентуков Калмыкии — ровно тот случай,
-            # когда неверный адресат хуже пустого.
-            if not marks or marks[-1][1] != subject:
-                marks.append((float(start), subject))
+        text = getattr(block, "text", "") or ""
+        offset = 0
+        for sentence in _SENTENCES.split(text):
+            at = text.find(sentence, offset)
+            if at < 0:
+                at = offset
+            offset = at + len(sentence)
+            if sentence.strip():
+                flat.append((_moment(block, at), sentence))
+
+    marks: list[tuple[float, str]] = []
+    for position, (start, sentence) in enumerate(flat):
+        strong = is_handover(sentence)
+        if not strong and not is_weak_handover(sentence):
+            continue
+        # Объявляют и называют порознь: «Следующий регион.» — и уже
+        # следующей фразой «Джамбулат Хизирович, Кисловодск». Пока смотрели
+        # только саму фразу перехода, весь первый час штаба оставался без
+        # региона: там объявляет ведущий, а называет докладчик.
+        if leaves_regions(sentence):
+            # Ушли с регионов — искать название вперёд незачем: следующее
+            # найденное будет упомянуто в общей части мимоходом.
+            subject = ""
+        else:
+            subject = find_subject(sentence) or _ahead(flat, position)
+        if not strong and not subject:
+            # Слабый переход без региона — не переход: «и так далее»,
+            # «полигоны продолжают действовать». Стирать по нему нельзя.
+            continue
+        # Сильный переход, в котором региона не разобрать, — всё равно
+        # переход, и он стирает предыдущий. «Далее города
+        # Северо-Кавказского округа и Синтуки»: что Ессентуки, знает
+        # человек, а список видит только несовпадение. Оставить прежний
+        # регион значило бы подписать поручения Ессентуков Калмыкии — ровно
+        # тот случай, когда неверный адресат хуже пустого.
+        if not marks or marks[-1][1] != subject:
+            marks.append((start, subject))
     return marks
+
+
+def _moment(block, offset: int) -> float:
+    """Где внутри реплики сказана эта фраза, по доле текста.
+
+    Приблизительно, и точнее не выйдет: время известно только для реплики
+    целиком. Но реплика ведущего бывает в две минуты, и «Следующий регион»
+    в её конце, отнесённое к её началу, отдавало следующему региону всё, что
+    поручено в этой же реплике предыдущему.
+    """
+    start, end = block.start, block.end
+    length = len(getattr(block, "text", "") or "")
+    if not length or end is None or end <= start:
+        return float(start)
+    return float(start) + (end - start) * (offset / length)
+
+
+def _ahead(flat: Sequence[tuple[float, str]], position: int) -> str:
+    """Название региона в ближайших фразах после перехода."""
+    for step in range(1, LOOKAHEAD + 1):
+        if position + step >= len(flat):
+            break
+        subject = find_subject(flat[position + step][1])
+        if subject:
+            return subject
+    return ""
 
 
 def at(marks: Sequence[tuple[float, str]], seconds: float | None) -> str:

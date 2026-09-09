@@ -18,6 +18,7 @@ from typing import Sequence
 
 from . import dates
 from .blocks import UNKNOWN, Transcript
+from .directory import DEFAULT_LABEL
 from .people import Person, canonical, find
 from .tasks import Task
 
@@ -43,6 +44,10 @@ class Protocol:
     people: list[Person] = field(default_factory=list)
     tasks: list[Task] = field(default_factory=list)
     transcript: Transcript | None = None
+    #: Как называется графа «чей вопрос разбирали». У штаба это «Регион», у
+    #: завода «Площадка», у холдинга «Общество» — форму разбора приносит
+    #: организация, а не инструмент.
+    unit_label: str = DEFAULT_LABEL
     #: Ответы модели как есть. В документ не идут, нужны для разбора: когда
     #: поручений не нашлось, только по ним и видно, в чём дело.
     answers: list[str] = field(default_factory=list)
@@ -54,13 +59,13 @@ class Protocol:
     def actionable(self) -> list[Task]:
         """Поручения, у которых есть адресат — человек или регион.
 
-        Регион — не исполнитель, названный вслух, а тот, чей вопрос
-        разбирали. Но для работы этого хватает: по региону ответственного
-        находят в своём списке и рассылают поручение ему. Пункт с регионом
-        и пустым исполнителем — это работа, которую можно начать, а не
-        вопрос, который надо выяснять.
+        Направление — не исполнитель, названный вслух, а тот, чей вопрос
+        разбирали. Но для работы этого хватает: по нему ответственного
+        находят в своём списке и рассылают поручение ему. Пункт с
+        направлением и пустым исполнителем — это работа, которую можно
+        начать, а не вопрос, который надо выяснять.
         """
-        return [t for t in self.tasks if t.who or t.region]
+        return [t for t in self.tasks if t.who or t.unit]
 
     @property
     def needs_clarification(self) -> list[Task]:
@@ -71,7 +76,7 @@ class Protocol:
         видеть такие пункты отдельно, чтобы уточнить их, а не разослать
         поручение в никуда.
         """
-        return [t for t in self.tasks if not t.who and not t.region]
+        return [t for t in self.tasks if not t.who and not t.unit]
 
     def as_markdown(self, *, with_transcript: bool = False) -> str:
         """Протокол как размеченный текст."""
@@ -118,12 +123,15 @@ class Protocol:
         if not self.tasks:
             lines.append("Поручений не зафиксировано.")
         else:
-            lines.extend(_task_table(self.actionable))
+            lines.extend(_task_table(self.actionable, self.unit_label))
             if self.needs_clarification:
                 lines.append("")
                 lines.append("### Требуют уточнения")
                 lines.append("")
-                lines.append("Прозвучали, но ни исполнитель, ни регион не названы:")
+                lines.append(
+                    "Прозвучали, но ни исполнитель, ни "
+                    f"{self.unit_label.lower()} не названы:"
+                )
                 lines.append("")
                 for task in self.needs_clarification:
                     due = f", срок: {_due(task)}" if (task.due or task.due_date) else ""
@@ -155,7 +163,7 @@ class Protocol:
             "model": self.transcript.model if self.transcript else "",
             "tasks": "\n".join(_task_lines(self.actionable)),
             "unclear": "\n".join(f"- {t.what}" for t in self.needs_clarification),
-            "tasks_table": "\n".join(_task_table(self.actionable)),
+            "tasks_table": "\n".join(_task_table(self.actionable, self.unit_label)),
             "tasks_count": str(len(self.tasks)),
         }
 
@@ -221,12 +229,12 @@ class Protocol:
         # Срок двумя колонками: сказанное и дата. По дате сортируют и
         # ставят напоминания, по сказанному спорят.
         writer.writerow(
-            ["№", "Время", "Поручение", "Исполнитель", "Регион", "Срок",
+            ["№", "Время", "Поручение", "Исполнитель", self.unit_label, "Срок",
              "Срок датой", "Кто сказал", "Цитата"]
         )
         for number, task in enumerate(self.tasks, 1):
             writer.writerow([
-                number, _clock(task.at), task.what, task.who, task.region,
+                number, _clock(task.at), task.what, task.who, task.unit,
                 task.due, task.due_date, task.said_by, task.context or task.quote,
             ])
         return buffer.getvalue()
@@ -245,6 +253,7 @@ def build_protocol(
     secretary: str = "",
     number: str = "",
     answers: Sequence[str] | None = None,
+    unit_label: str = DEFAULT_LABEL,
 ) -> Protocol:
     """Собирает протокол.
 
@@ -271,7 +280,7 @@ def build_protocol(
             Task(
                 what=task.what, who=canonical(task.who, people), due=task.due,
                 chunk=task.chunk, at=task.at, quote=task.quote,
-                context=task.context, said_by=task.said_by, region=task.region,
+                context=task.context, said_by=task.said_by, unit=task.unit,
                 due_date=task.due_date,
             )
             for task in tasks
@@ -294,6 +303,7 @@ def build_protocol(
         tasks=list(tasks),
         transcript=transcript,
         answers=list(answers or []),
+        unit_label=unit_label,
     )
 
 
@@ -308,28 +318,28 @@ def _task_lines(tasks: Sequence[Task]) -> list[str]:
     for number, task in enumerate(tasks, 1):
         due = f", срок — {_due(task)}" if (task.due or task.due_date) else ""
         place = f" [{_clock(task.at)}]" if task.at is not None else ""
-        who = task.who or task.region or "исполнитель не назван"
+        who = task.who or task.unit or "исполнитель не назван"
         lines.append(f"{number}. {who}: {task.what}{due}.{place}")
     return lines
 
 
-def _task_table(tasks: Sequence[Task]) -> list[str]:
+def _task_table(tasks: Sequence[Task], label: str = DEFAULT_LABEL) -> list[str]:
     if not tasks:
         return ["Поручений с назначенным исполнителем нет."]
     # Время — колонка проверки. Без неё человек ищет место в двухчасовой
     # записи сам, и сверка восьмидесяти пунктов съедает больше, чем сэкономил
     # разбор.
-    # Регион отдельной графой, а не вместе с исполнителем: исполнителя
-    # назвали вслух, а регион выведен из хода совещания, и смешивать их в
-    # одной клетке значит выдавать второе за первое.
+    # Направление отдельной графой, а не вместе с исполнителем:
+    # исполнителя назвали вслух, а направление выведено из хода совещания, и
+    # смешивать их в одной клетке значит выдавать второе за первое.
     rows = [
-        "| № | Время | Поручение | Исполнитель | Регион | Срок |",
+        f"| № | Время | Поручение | Исполнитель | {label} | Срок |",
         "|---|---|---|---|---|---|",
     ]
     for number, task in enumerate(tasks, 1):
         rows.append(
             f"| {number} | {_clock(task.at)} | {task.what} | {task.who or '—'} "
-            f"| {task.region or '—'} | {_due(task)} |"
+            f"| {task.unit or '—'} | {_due(task)} |"
         )
     return rows
 

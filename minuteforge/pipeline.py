@@ -32,10 +32,10 @@ from .checks import Suspicion, suspicious
 from .chunking import estimate_tokens, split_into_chunks, split_into_windows
 from .config import Settings
 from . import dates
+from .directory import read_directory, at as unit_at
 from .journal import Journal
 from .llm import LLMClient
 from .people import Person
-from . import regions
 from .protocol import Protocol, build_protocol
 from .tasks import (
     COLLECTIVE_NAMES,
@@ -306,28 +306,39 @@ def protocol_from_transcript(
     chair = most_addressed(for_model)
     if chair:
         logger.info("Совещание ведёт {} — в исполнители не пойдёт", chair)
+    # Справочник того, по кому идёт разбор. Нет файла — графа останется
+    # пустой: услышанное название инструмент не берёт, потому что
+    # распознавание их коверкает, а неверный адресат хуже пустого.
+    units = read_directory(settings.directory_file, label=settings.directory_label)
+    if not units:
+        logger.warning(
+            "Справочник направлений не задан — графа «{}» останется пустой. "
+            "Файл указывается настройкой directory_file.",
+            settings.directory_label,
+        )
+
     record = Journal()
     tasks = extract_tasks(
         chunks, client, progress=progress, answers=answers,
-        corpus=named.as_text(), chair=chair, journal=record,
+        corpus=named.as_text(), chair=chair, journal=record, directory=units,
     )
     logger.info("Найдено поручений: {}", len(tasks))
 
     # Чей вопрос разбирали. Считается по всей стенограмме, а не по окну:
-    # регион объявляют один раз, а поручают потом четверть часа.
-    marks = regions.follow(for_model)
-    # Поручению, данному всему залу, регион не приписывается: «обращайтесь
+    # направление объявляют один раз, а поручают потом четверть часа.
+    marks = units.follow(for_model)
+    # Поручению, данному всему залу, направление не приписывается: «обращайтесь
     # в головную организацию — все регионы — Пермский край» сужает адресата
     # до одного субъекта, хотя сказано было всем.
     tasks = [
         task if task.who in COLLECTIVE_NAMES
-        else replace(task, region=regions.at(marks, task.at))
+        else replace(task, unit=unit_at(marks, task.at))
         for task in tasks
     ]
-    with_region = sum(1 for task in tasks if task.region)
+    filled = sum(1 for task in tasks if task.unit)
     logger.info(
-        "Разбор шёл по {} регионам, у {} поручений регион определён",
-        len({name for _, name in marks if name}), with_region,
+        "Разбор шёл по {} направлениям, у {} поручений графа «{}» заполнена",
+        len({name for _, name in marks if name}), filled, units.label,
     )
 
     protocol = build_protocol(
@@ -342,6 +353,7 @@ def protocol_from_transcript(
         attendees=meeting.attendees,
         people=meeting.people,
         answers=answers,
+        unit_label=units.label,
     )
     protocol.journal = record
     return protocol

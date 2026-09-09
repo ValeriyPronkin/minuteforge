@@ -37,6 +37,7 @@ from minuteforge.config import (  # noqa: E402
     Settings,
 )  # noqa: E402
 from minuteforge.dates import date_from_name  # noqa: E402
+from minuteforge.directory import read_directory  # noqa: E402
 from minuteforge.journal import setup_file_log  # noqa: E402
 from minuteforge.llm import LLMClient, is_embedder, same_model  # noqa: E402
 from minuteforge.people import (  # noqa: E402
@@ -350,6 +351,23 @@ with st.sidebar:
         "на нескольких.",
     )
 
+    # Справочник направлений — то, чем заполняется графа «чей вопрос
+    # разбирали». Без него она пустая, и человек должен узнать об этом до
+    # расчёта, а не после сорока минут ожидания.
+    units = read_directory(BASE.directory_file, label=BASE.directory_label)
+    if units:
+        st.caption(
+            f"Справочник «{units.label}»: {len(units)} записей — "
+            f"`{BASE.directory_file}`"
+        )
+    else:
+        st.warning(
+            f"Справочник направлений не задан: графа «{BASE.directory_label}» "
+            "останется пустой, и поручения без названного исполнителя уйдут "
+            "в раздел «Требуют уточнения». Файл указывается в config.yaml "
+            "полем directory_file."
+        )
+
     st.header("Модель для поручений")
 
     # Адрес спрятан намеренно: когда сервер отвечает, список моделей внизу и
@@ -516,6 +534,8 @@ with st.sidebar:
     llm_url = st.session_state.get("llm_url", address)
 
 settings = Settings(
+    directory_file=BASE.directory_file,
+    directory_label=BASE.directory_label,
     asr_model=asr_model,
     language=language,
     speakers=int(speakers) or None,
@@ -956,7 +976,8 @@ if protocol is not None:
     if unclear:
         st.warning(
             f"{unclear} поручений прозвучали без адресата: не названы ни "
-            "исполнитель, ни регион. Они не выброшены и не получили "
+            f"исполнитель, ни {protocol.unit_label.lower()}. Они не выброшены "
+            "и не получили "
             "выдуманного адресата — смотрите отдельный раздел."
         )
 

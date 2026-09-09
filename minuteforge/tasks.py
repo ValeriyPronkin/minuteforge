@@ -180,7 +180,7 @@ class Task:
     #: исполнитель: исполнителя называют вслух, а регион берётся из хода
     #: совещания. Но по региону ответственного находят по своему списку, и
     #: пустая графа исполнителя перестаёт быть тупиком.
-    region: str = ""
+    unit: str = ""
 
     @property
     def key(self) -> str:
@@ -464,16 +464,6 @@ _BY_PATRONYMIC = re.compile(
     r"^([А-ЯЁ][а-яё]{2,})\s+([А-ЯЁ][а-яё]+(?:ович|евич|овна|евна|ична))\b"
 )
 
-#: Обращение к региону: «Коллеги Ростовской области, просьба подтвердить»,
-#: «Ставропольский край, начинайте». Так на штабе обращаются чаще, чем по
-#: фамилии: за регион отвечает не человек, а администрация.
-_BY_REGION = re.compile(
-    r"^(?:коллеги\s+|администрация\s+|город\s+)?"
-    r"([А-ЯЁ][а-яё]+(?:ой|ая|ий|ый|ая)?\s+"
-    r"(?:области|область|края|край|республики|республика|округа|округ))\b",
-    re.IGNORECASE,
-)
-
 #: Обращение по имени с фамилией: «Наталья Ковач, просьба обозначить срок».
 #: Первое слово проверяется по святцам — иначе «Принято, продолжаем» тоже
 #: сойдёт за обращение.
@@ -483,7 +473,7 @@ _BY_GIVEN_NAME = re.compile(r"^([А-ЯЁ][а-яё]{2,})(?:\s+([А-ЯЁ][а-яё]
 _BY_ROOM = re.compile(r"^(коллеги|уважаемые\s+коллеги|регионы|субъекты)\b", re.IGNORECASE)
 
 
-def addressee(sentence: str) -> str:
+def addressee(sentence: str, directory=None) -> str:
     """Кому сказано — по обращению в начале фразы.
 
     Поручение почти всегда открывается адресатом: «Наталья Ковач, просьба
@@ -503,9 +493,14 @@ def addressee(sentence: str) -> str:
     by_name = _BY_PATRONYMIC.match(head)
     if by_name:
         return f"{by_name.group(1)} {by_name.group(2)}"
-    by_region = _BY_REGION.match(head)
-    if by_region:
-        return " ".join(by_region.group(1).split())
+    # Обращение к направлению: «Коллеги Ростовской области, просьба
+    # подтвердить», «Первая площадка, начинайте». Так на совещании, где
+    # разбор идёт по кругу, обращаются чаще, чем по фамилии: отвечает не
+    # человек, а организация. Названия берутся из справочника — угадывать
+    # их по окончанию слова значит выдумывать адресата.
+    by_unit = directory.starts_with(head) if directory else ""
+    if by_unit:
+        return by_unit
     by_room = _BY_ROOM.match(head)
     if by_room:
         return COLLECTIVE.get(by_room.group(1).lower(), "")
@@ -590,7 +585,9 @@ def most_addressed(blocks: Sequence[object]) -> str:
     return name if times >= CHAIR_MENTIONS else ""
 
 
-def with_addressee(tasks: Sequence[Task], *, chair: str = "") -> list[Task]:
+def with_addressee(
+    tasks: Sequence[Task], *, chair: str = "", directory=None,
+) -> list[Task]:
     """Дописывает исполнителя из обращения там, где модель его не назвала.
 
     Своё модель не переписывает: сказанное ею проверено по стенограмме и
@@ -606,7 +603,7 @@ def with_addressee(tasks: Sequence[Task], *, chair: str = "") -> list[Task]:
             continue
         # Ищем и в цитате, и в куске: обращение бывает фразой раньше —
         # «Коллеги Ростовской области. Просьба подтвердить срок ввода».
-        found = addressee(task.quote) or addressee(task.context)
+        found = addressee(task.quote, directory) or addressee(task.context, directory)
         if found and chair and same_person(found, chair):
             found = ""
         filled.append(replace(task, who=found) if found else task)
@@ -1061,7 +1058,7 @@ def one_per_phrase(tasks: Sequence[Task]) -> list[Task]:
             what=joined,
             who=next((t.who for t in group if t.who), ""),
             due=next((t.due for t in group if t.due), ""),
-            region=next((t.region for t in group if t.region), ""),
+            unit=next((t.unit for t in group if t.unit), ""),
             at=next((t.at for t in group if t.at is not None), None),
         ))
     return kept
@@ -1113,6 +1110,7 @@ def extract_tasks(
     corpus: str | None = None,
     chair: str = "",
     journal=None,
+    directory=None,
 ) -> list[Task]:
     """Проходит по кускам стенограммы и собирает поручения.
 
@@ -1131,6 +1129,9 @@ def extract_tasks(
         нашлось, это единственный способ понять почему: модель могла
         ответить прозой, по-английски или пересказать задание вместо
         ответа — и всё это выглядит одинаково, как пустой результат.
+    :param directory: справочник направлений. По нему опознаётся обращение
+        к организации — «Коллеги Ростовской области, просьба подтвердить»;
+        без него такое обращение адресатом не считается.
     :param journal: куда записать ход разбора по стадиям. Без него видно
         только начало и конец, и «модель не нашла» неотличимо от «нашла, а
         мы отсеяли»: пункта нет в обоих случаях.
@@ -1285,7 +1286,7 @@ def extract_tasks(
                 "один и срок один.",
             )
         single = together
-    named = with_due(with_addressee(single, chair=chair))
+    named = with_due(with_addressee(single, chair=chair, directory=directory))
     added = sum(1 for was, now in zip(single, named) if not was.who and now.who)
     if added:
         logger.info("Исполнитель взят из обращения: {} поручений", added)
@@ -1358,7 +1359,7 @@ def attach_source(tasks: list[Task], chunk: Chunk) -> list[Task]:
             quote=found.quote if found else "",
             context=found.context if found else "",
             said_by=found.said_by if found else "",
-            region=task.region, due_date=task.due_date,
+            unit=task.unit, due_date=task.due_date,
         ))
     return attached
 
@@ -1667,7 +1668,7 @@ def _merge_group(tasks: list[Task], indexes: list[int]) -> Task:
         quote=next((t.quote for t in group if t.quote), ""),
         context=next((t.context for t in group if t.context), ""),
         said_by=next((t.said_by for t in group if t.said_by), ""),
-        region=next((t.region for t in group if t.region), ""),
+        unit=next((t.unit for t in group if t.unit), ""),
         due_date=next((t.due_date for t in group if t.due_date), ""),
     )
 
@@ -1850,7 +1851,7 @@ def dedupe(tasks: Iterable[Task]) -> list[Task]:
             quote=old_task.quote or task.quote,
             context=old_task.context or task.context,
             said_by=old_task.said_by or task.said_by,
-            region=old_task.region or task.region,
+            unit=old_task.unit or task.unit,
             due_date=old_task.due_date or task.due_date,
         )
     return kept

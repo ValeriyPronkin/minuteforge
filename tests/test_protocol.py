@@ -100,7 +100,7 @@ def test_date_is_never_invented():
 def test_csv_carries_every_task_including_unassigned():
     rows = list(csv.reader(StringIO(Protocol(tasks=TASKS).tasks_csv()), delimiter=";"))
     assert rows[0] == [
-        "№", "Время", "Поручение", "Исполнитель", "Регион", "Срок", "Срок датой",
+        "№", "Время", "Поручение", "Исполнитель", "Направление", "Срок", "Срок датой",
         "Кто сказал", "Цитата"
     ]
     assert len(rows) == 1 + len(TASKS)
@@ -187,7 +187,7 @@ def test_every_task_carries_its_place_in_the_recording():
 
     rows = list(csv.reader(StringIO(Protocol(tasks=tasks).tasks_csv()), delimiter=";"))
     assert rows[0] == [
-        "№", "Время", "Поручение", "Исполнитель", "Регион", "Срок", "Срок датой",
+        "№", "Время", "Поручение", "Исполнитель", "Направление", "Срок", "Срок датой",
         "Кто сказал", "Цитата"
     ]
     assert rows[1][1] == "01:05:30"
@@ -214,7 +214,7 @@ def test_protocol_names_the_model_among_its_details():
     assert protocol.fields()["model"] == "large-v3"
 
 
-def test_a_task_with_only_a_region_is_work_not_a_question():
+def test_a_task_with_only_a_unit_is_work_not_a_question():
     """Регион — не исполнитель, но и не тупик.
 
     Исполнителя называют вслух, регион берётся из хода совещания. Зато по
@@ -222,7 +222,7 @@ def test_a_task_with_only_a_region_is_work_not_a_question():
     работу, а не в раздел «требуют уточнения».
     """
     tasks = [
-        Task("Подтвердить срок ввода", region="Архангельская область"),
+        Task("Подтвердить срок ввода", unit="Архангельская область"),
         Task("Организовать фотоотчёт"),
     ]
     protocol = Protocol(tasks=tasks)
@@ -232,7 +232,7 @@ def test_a_task_with_only_a_region_is_work_not_a_question():
 
     text = protocol.as_markdown()
     assert "| Архангельская область |" in text
-    assert "ни исполнитель, ни регион не названы" in text
+    assert "ни исполнитель, ни направление не названы" in text
 
 
 def test_a_relative_deadline_becomes_a_date():

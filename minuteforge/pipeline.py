@@ -19,7 +19,7 @@ from typing import Sequence
 
 from loguru import logger
 
-from .audio import extract_audio, parse_time
+from .audio import extract_audio, parse_time, recorded_at
 from .blocks import (
     Block,
     Transcript,
@@ -31,6 +31,7 @@ from .blocks import (
 from .checks import Suspicion, suspicious
 from .chunking import estimate_tokens, split_into_chunks, split_into_windows
 from .config import Settings
+from . import dates
 from .llm import LLMClient
 from .people import Person
 from . import regions
@@ -108,6 +109,51 @@ def cache_dir_for(
     mark = f"{source.name}|{stat.st_size}|{int(stat.st_mtime)}|{start or 0}|{end or 0}"
     short = hashlib.sha1(mark.encode("utf-8")).hexdigest()[:8]
     return work_dir / f"{source.stem}-{short}"
+
+
+def recorded_when(source: str | Path) -> dates.Recorded | None:
+    """Когда состоялось совещание — по самой записи.
+
+    Дату совещания приходится вписывать руками, а она нужна не только в шапке:
+    от неё считаются сроки, и без неё «через две недели» так и остаётся словами.
+    Спрашивать её у человека, когда сама запись её знает, — лишняя работа и
+    лишний повод ошибиться.
+
+    Три источника, по убыванию доверия:
+
+    1. **Имя файла.** Его даёт человек или программа записи, и оно переживает
+       копирование: «Совещание 07.09.2026.mp4».
+    2. **Метаданные контейнера.** Точный момент начала записи, но его теряет
+       перекодирование, а в некоторых контейнерах его нет вовсе.
+    3. **Время файла на диске.** Последнее средство, и самое ненадёжное: у
+       скопированного файла это может оказаться день копирования.
+
+    Первые два дополняют друг друга: имя чаще знает день, метаданные — час.
+    Если они говорят об одном дне, берётся день из имени и час из свойств.
+
+    Ничего не нашлось — ``None``. Дата совещания не то, что можно угадать:
+    пусть лучше её впишут руками, чем документ уйдёт с выдуманной.
+    """
+    source = Path(source)
+    named = dates.date_from_name(source.name)
+    moment = recorded_at(source) if source.exists() else None
+
+    if named is not None:
+        if moment is not None and moment.date() == named.day and not named.clock:
+            return replace(
+                named,
+                clock=moment.strftime("%H:%M"),
+                source="из имени файла и свойств записи",
+            )
+        return named
+    if moment is not None:
+        return dates.Recorded(moment.date(), moment.strftime("%H:%M"), "из свойств записи")
+
+    try:
+        changed = datetime.fromtimestamp(source.stat().st_mtime)
+    except OSError:
+        return None
+    return dates.Recorded(changed.date(), source="по времени файла на диске")
 
 
 def transcribe_meeting(

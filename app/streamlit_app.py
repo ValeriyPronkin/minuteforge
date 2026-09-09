@@ -36,6 +36,7 @@ from minuteforge.config import (  # noqa: E402
     LLM_KEY_ENV,
     Settings,
 )  # noqa: E402
+from minuteforge.dates import date_from_name  # noqa: E402
 from minuteforge.llm import LLMClient, is_embedder, same_model  # noqa: E402
 from minuteforge.people import (  # noqa: E402
     merge_suggestions,
@@ -52,6 +53,7 @@ from minuteforge.pipeline import (  # noqa: E402
     protocol_from_transcript,
     _free_name,
     _text_with_head,
+    recorded_when,
     run_dir,
     save,
     save_transcript,
@@ -558,6 +560,31 @@ with st.expander("Как это работает"):
         """
     )
 
+
+def suggest_meeting_date(source: Path | None, name: str = "") -> None:
+    """Подставляет дату совещания, как только выбрана запись.
+
+    Поле «Дата и время» легко не заметить, а без него сроки остаются словами:
+    «через две недели» превращается в дату только от дня совещания. При этом
+    день почти всегда известен самой записи — из имени файла или из свойств.
+    Спрашивать его у человека, когда он лежит рядом, значит просить лишнюю
+    работу и получать пустое поле.
+
+    Подставленное остаётся догадкой: под полем написано, откуда оно взялось,
+    и правится оно как обычный текст. Заново подставляется только при смене
+    файла — иначе исправление стиралось бы на первом же нажатии кнопки.
+    """
+    mark = str(source) if source is not None else name
+    if not mark or st.session_state.get("date_from_file") == mark:
+        return
+    st.session_state["date_from_file"] = mark
+    # У загруженного через браузер файла нет ни пути, ни свойств — только имя.
+    found = recorded_when(source) if source is not None else date_from_name(name)
+    st.session_state["meeting_date"] = found.as_text() if found else ""
+    st.session_state["date_guess"] = found.as_text() if found else ""
+    st.session_state["date_guess_source"] = found.source if found else ""
+
+
 # ---------------------------------------------------------------- шаг 1
 st.subheader("Шаг 1. Распознавание")
 
@@ -573,8 +600,12 @@ if ready_segments is not None:
         [str(note) for note in loaded.get("notes") or []] if known else []
     )
     st.success(f"Загружена готовая стенограмма: {len(st.session_state['segments'])} сегментов.")
+    # Записи рядом нет, и спросить дату не у кого — остаётся имя файла.
+    # Обычно это «стенограмма.json», и тогда поле останется пустым.
+    suggest_meeting_date(None, ready_segments.name)
 
 if source_path is not None or uploaded is not None:
+    suggest_meeting_date(source_path, uploaded.name if uploaded is not None else "")
     if source_path is not None:
         size = source_path.stat().st_size / 1024 / 1024
         st.write(f"Файл: `{source_path}` — {size:.0f} МБ, читается с диска.")
@@ -814,13 +845,29 @@ st.subheader("Шаг 3. Протокол")
 left, right = st.columns(2)
 with left:
     title = st.text_input("Заголовок", "Протокол совещания")
+    # Значение приходит через session_state: его подставляет
+    # suggest_meeting_date, когда выбирают запись, — и она же не трогает
+    # поле, пока файл тот же, чтобы правка человека не стиралась.
     date = st.text_input(
-        "Дата и время", placeholder="05.06.2025, 11:00",
+        "Дата и время", key="meeting_date", placeholder="05.06.2025, 11:00",
         help="От неё считаются сроки. На совещании их называют относительно "
         "— «через две недели», «до конца года», «сегодня же», — и датой "
         "это становится только от дня совещания. Без даты в поручениях "
-        "останется сказанное вслух, без календарного срока.",
+        "останется сказанное вслух, без календарного срока. "
+        "Подставляется из записи: имя файла и свойства обычно знают день, "
+        "иногда и час. Проверьте и поправьте — это реквизит документа.",
     )
+    if st.session_state.get("date_from_file"):
+        if date and date == st.session_state.get("date_guess"):
+            st.caption(
+                f"Взято {st.session_state['date_guess_source']} — проверьте: "
+                "от этой даты считаются все сроки."
+            )
+        elif not date:
+            st.caption(
+                "В имени файла и в свойствах записи даты нет — впишите руками, "
+                "иначе «через две недели» останется без календарного срока."
+            )
     number = st.text_input("Номер протокола", placeholder="17")
 with right:
     place = st.text_input("Место", placeholder="Переговорная 3")

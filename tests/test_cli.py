@@ -331,3 +331,51 @@ def test_a_transcript_from_an_older_version_still_reads(tmp_path):
 
     assert [b.text for b in restored.blocks] == ["Начинаем."]
     assert restored.model == ""
+
+
+def test_run_takes_the_meeting_date_from_the_recording(tmp_path, monkeypatch, capsys, fake_llm):
+    """В команде run дату не спрашивают отдельным ключом там, где она лежит
+    в имени файла: иначе протоколы уходят без сроков."""
+    video = tmp_path / "Совещание 07.09.2026.mp4"
+    video.write_bytes(b"")
+    transcript = Transcript([Block("SPEAKER_00", "Подготовьте план через две недели.", 0.0, 6.0)])
+    monkeypatch.setattr("minuteforge.cli.transcribe_meeting", lambda *a, **kw: transcript)
+    # Чтобы проверка не зависела от того, стоит ли ffprobe на этой машине.
+    monkeypatch.setattr("minuteforge.pipeline.recorded_at", lambda source: None)
+
+    seen = {}
+
+    def remember(transcript, settings, *, meeting=None, **kwargs):
+        seen["meeting"] = meeting
+        from minuteforge.protocol import Protocol
+        return Protocol(date=meeting.date)
+
+    monkeypatch.setattr("minuteforge.cli.protocol_from_transcript", remember)
+    monkeypatch.setattr("minuteforge.cli.save", lambda *a, **kw: {})
+
+    assert main(["run", str(video), "--out", str(tmp_path / "out")]) == 0
+    assert seen["meeting"].date == "07.09.2026"
+    assert "из имени файла" in capsys.readouterr().out
+
+
+def test_a_date_given_by_hand_is_not_overridden(tmp_path, monkeypatch, fake_llm):
+    """Человек знает про совещание больше, чем имя файла."""
+    video = tmp_path / "Совещание 07.09.2026.mp4"
+    video.write_bytes(b"")
+    monkeypatch.setattr(
+        "minuteforge.cli.transcribe_meeting",
+        lambda *a, **kw: Transcript([Block("SPEAKER_00", "Готово.", 0.0, 2.0)]),
+    )
+
+    seen = {}
+
+    def remember(transcript, settings, *, meeting=None, **kwargs):
+        seen["meeting"] = meeting
+        from minuteforge.protocol import Protocol
+        return Protocol(date=meeting.date)
+
+    monkeypatch.setattr("minuteforge.cli.protocol_from_transcript", remember)
+    monkeypatch.setattr("minuteforge.cli.save", lambda *a, **kw: {})
+
+    main(["run", str(video), "--out", str(tmp_path / "out"), "--date", "08.09.2026, 11:00"])
+    assert seen["meeting"].date == "08.09.2026, 11:00"

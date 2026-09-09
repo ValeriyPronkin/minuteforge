@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -64,6 +65,62 @@ def _run(command: Sequence[str]) -> subprocess.CompletedProcess:
 
 def ffmpeg_available(which: Callable[[str], str | None] = shutil.which) -> bool:
     return which("ffmpeg") is not None
+
+
+def recorded_at(
+    source: str | Path,
+    *,
+    run: Runner = _run,
+    which: Callable[[str], str | None] = shutil.which,
+) -> datetime | None:
+    """Когда началась запись — по метаданным самого файла.
+
+    Камеры, телефоны и программы видеосвязи записывают в контейнер момент
+    начала записи. Для совещания это и есть время начала — в отличие от
+    времени файла на диске, которое сбивает любое копирование.
+
+    Время в контейнере хранится по Гринвичу, поэтому переводится в местное:
+    в протоколе нужен тот час, который участники видели на своих часах.
+    Возвращается ``None``, если метки нет, ffprobe не установлен или файл ему
+    непонятен, — это обычное дело, а не ошибка: дату тогда впишут руками.
+    """
+    if which("ffprobe") is None:
+        return None
+    try:
+        result = run([
+            "ffprobe", "-v", "error",
+            "-show_entries", "format_tags=creation_time",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(source),
+        ])
+    except OSError:
+        return None
+    if getattr(result, "returncode", 1) != 0:
+        return None
+
+    for line in (getattr(result, "stdout", "") or "").splitlines():
+        moment = _parse_moment(line.strip())
+        if moment is not None:
+            return moment
+    return None
+
+
+def _parse_moment(text: str) -> datetime | None:
+    """Разбирает «2026-09-07T07:00:12.000000Z» в местное время."""
+    if not text:
+        return None
+    # Букву Z питон научился читать только в 3.11, а инструмент ставят и в
+    # окружения постарше.
+    normalized = text.replace("Z", "+00:00").replace("z", "+00:00")
+    try:
+        moment = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if moment.year < 1990:
+        # Кодировщики, которым время неизвестно, пишут начало эпохи. Это не
+        # дата совещания, а признак того, что метки нет.
+        return None
+    return moment.astimezone().replace(tzinfo=None) if moment.tzinfo else moment
 
 
 def extract_audio(

@@ -1,8 +1,15 @@
 import subprocess
+from datetime import datetime, timezone
 
 import pytest
 
-from minuteforge.audio import CHANNELS, SAMPLE_RATE, AudioError, extract_audio
+from minuteforge.audio import (
+    CHANNELS,
+    SAMPLE_RATE,
+    AudioError,
+    extract_audio,
+    recorded_at,
+)
 
 
 class FakeFfmpeg:
@@ -115,3 +122,39 @@ def test_target_directory_is_created(video, tmp_path):
     target = tmp_path / "выгрузка" / "audio.wav"
     extract_audio(video, target, run=FakeFfmpeg(), which=found)
     assert target.exists()
+
+
+class FakeProbe:
+    """Заглушка вместо ffprobe: отдаёт заготовленный ответ."""
+
+    def __init__(self, stdout="", returncode=0):
+        self.stdout = stdout
+        self.returncode = returncode
+        self.commands = []
+
+    def __call__(self, command):
+        self.commands.append(list(command))
+        return subprocess.CompletedProcess(command, self.returncode, self.stdout, "")
+
+
+def test_the_recording_start_is_read_from_the_container(video):
+    """Программы видеосвязи пишут в контейнер момент начала записи. Для
+    совещания это и есть его время — в отличие от времени файла на диске."""
+    probe = FakeProbe("2026-09-07T07:00:12.000000Z\n")
+    moment = recorded_at(video, run=probe, which=found)
+
+    # По Гринвичу, поэтому переводится в местное: в протоколе нужен тот час,
+    # который участники видели на своих часах.
+    expected = datetime(2026, 9, 7, 7, 0, 12, tzinfo=timezone.utc).astimezone()
+    assert moment == expected.replace(tzinfo=None)
+    assert "creation_time" in " ".join(probe.commands[0])
+
+
+def test_a_recording_without_the_mark_is_not_given_one(video):
+    """Метки нет — это обычное дело, а не ошибка: дату впишут руками."""
+    assert recorded_at(video, run=FakeProbe(""), which=found) is None
+    assert recorded_at(video, run=FakeProbe("N/A\n"), which=found) is None
+    # Кодировщик, которому время неизвестно, пишет начало эпохи.
+    assert recorded_at(video, run=FakeProbe("1970-01-01T00:00:00.000000Z"), which=found) is None
+    assert recorded_at(video, run=FakeProbe("", returncode=1), which=found) is None
+    assert recorded_at(video, run=FakeProbe("2026-09-07T07:00:12Z"), which=missing) is None

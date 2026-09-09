@@ -34,6 +34,7 @@ from .pipeline import (
     Meeting,
     check_writable,
     protocol_from_transcript,
+    recorded_when,
     save,
     save_transcript,
     transcribe_meeting,
@@ -112,7 +113,11 @@ def build_parser() -> argparse.ArgumentParser:
 def _add_meeting_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--out", type=Path, default=Path("data/output"))
     parser.add_argument("--title", default="Протокол совещания")
-    parser.add_argument("--date", default="", help="дата и время совещания")
+    parser.add_argument(
+        "--date", default="",
+        help="дата и время совещания; от неё считаются сроки вида «через две "
+        "недели». В команде run пусто — взять из самой записи",
+    )
     parser.add_argument("--place", default="")
     parser.add_argument("--chair", default="")
     parser.add_argument("--secretary", default="", help="секретарь совещания")
@@ -408,6 +413,20 @@ def command_protocol(args: argparse.Namespace) -> int:
 
 def command_run(args: argparse.Namespace) -> int:
     settings = settings_from(args)
+    # Дата совещания — не украшение шапки: от неё считаются сроки, а знает
+    # её обычно сама запись. Спрашивать её отдельным ключом там, где она
+    # лежит в имени файла, значит получать протоколы без сроков.
+    if not args.date:
+        found = recorded_when(args.source)
+        if found is None:
+            print(
+                "Дата совещания неизвестна: ни в имени файла, ни в свойствах "
+                "записи её нет. Сроки вида «через две недели» останутся "
+                "словами — задайте --date."
+            )
+        else:
+            args.date = found.as_text()
+            print(f"Дата совещания {found.source}: {args.date}")
     transcript = transcribe_meeting(
         args.source, settings, work_dir=args.out, progress=print_step
     )

@@ -1,4 +1,6 @@
 import json
+import os
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,7 @@ from minuteforge.pipeline import (
     Meeting,
     process,
     protocol_from_transcript,
+    recorded_when,
     save,
     save_transcript,
     transcribe_meeting,
@@ -634,3 +637,61 @@ def test_transcript_without_model_keeps_the_plain_format(tmp_path):
     )
 
     assert text.startswith("[00:00:00] SPEAKER_00:")
+
+
+def test_the_meeting_date_is_taken_from_the_recording(tmp_path, monkeypatch):
+    """Дата совещания — не украшение шапки: от неё считаются сроки. Знает её
+    обычно сама запись, и спрашивать её у человека значит получать пустое
+    поле, а вместе с ним протокол без сроков."""
+    monkeypatch.setattr("minuteforge.pipeline.recorded_at", lambda source: None)
+    video = tmp_path / "Совещание 07.09.2026.mp4"
+    video.write_bytes(b"")
+
+    found = recorded_when(video)
+    assert found.as_text() == "07.09.2026"
+    assert found.source == "из имени файла"
+
+
+def test_the_name_gives_the_day_and_the_properties_give_the_hour(tmp_path, monkeypatch):
+    """Они дополняют друг друга: имя чаще знает день, свойства — час."""
+    monkeypatch.setattr(
+        "minuteforge.pipeline.recorded_at",
+        lambda source: datetime(2026, 9, 7, 11, 30),
+    )
+    video = tmp_path / "Совещание 07.09.2026.mp4"
+    video.write_bytes(b"")
+
+    assert recorded_when(video).as_text() == "07.09.2026, 11:30"
+
+
+def test_the_properties_are_used_when_the_name_says_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "minuteforge.pipeline.recorded_at",
+        lambda source: datetime(2026, 9, 7, 11, 30),
+    )
+    video = tmp_path / "запись.mp4"
+    video.write_bytes(b"")
+
+    found = recorded_when(video)
+    assert found.as_text() == "07.09.2026, 11:30"
+    assert found.source == "из свойств записи"
+
+
+def test_the_file_time_on_disk_is_the_last_resort(tmp_path, monkeypatch):
+    """И самое ненадёжное: у скопированного файла это день копирования.
+    Поэтому источник называется вслух — человек должен видеть, чему верит."""
+    monkeypatch.setattr("minuteforge.pipeline.recorded_at", lambda source: None)
+    video = tmp_path / "запись.mp4"
+    video.write_bytes(b"")
+    os.utime(video, (1757232000, 1757232000))  # 07.09.2025
+
+    found = recorded_when(video)
+    assert found.day == datetime.fromtimestamp(1757232000).date()
+    assert found.source == "по времени файла на диске"
+    assert not found.clock, "время последней записи на диск — не час совещания"
+
+
+def test_a_date_that_is_nowhere_is_not_invented(tmp_path, monkeypatch):
+    """Пусть лучше впишут руками, чем документ уйдёт с выдуманной датой."""
+    monkeypatch.setattr("minuteforge.pipeline.recorded_at", lambda source: None)
+    assert recorded_when(tmp_path / "запись.mp4") is None

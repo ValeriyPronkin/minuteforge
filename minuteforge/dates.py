@@ -18,7 +18,8 @@ from __future__ import annotations
 
 import calendar
 import re
-from datetime import date, timedelta
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 
 #: Месяцы в родительном падеже — так их и произносят: «до пятнадцатого
 #: ноября», «на 30 ноября».
@@ -50,6 +51,78 @@ _UNITS = ("недел", "месяц", "день", "дня", "дней", "дне"
 #: Насколько дата должна остаться позади, чтобы считать её датой будущего
 #: года. Полгода: ближе к совещанию прошедшее число — это ссылка на прошлое.
 _LOOKS_LIKE_NEXT_YEAR = 180
+
+#: Дата в имени файла: «07.09.2026», «2026-09-07», «20260907». Разделителей
+#: может не быть вовсе — так называет свои записи Zoom: «GMT20260907-070012».
+_NAME_DMY = re.compile(r"(?<!\d)(\d{2})[.\-_](\d{2})[.\-_](20\d{2})(?!\d)")
+_NAME_YMD = re.compile(r"(?<!\d)(20\d{2})[.\-_ ]?(\d{2})[.\-_ ]?(\d{2})(?!\d)")
+
+#: Время сразу за датой: «2026-09-07 10-30», «20260907-070012». Секунды
+#: необязательны, но если они есть — их надо съесть целиком, иначе «070012»
+#: разберётся как 07:00 и подавится последними цифрами.
+#:
+#: Только вплотную к дате: число где-то дальше в имени — это уже размер кадра
+#: или номер части, а не час начала.
+_NAME_CLOCK = re.compile(
+    r"^[\s_\-.,]{0,3}[tT]?([01]\d|2[0-3])[.\-_: ]?([0-5]\d)(?:[.\-_: ]?[0-5]\d)?(?!\d)"
+)
+
+
+@dataclass(frozen=True)
+class Recorded:
+    """Когда сделана запись — и откуда это известно.
+
+    Источник хранится рядом с датой намеренно. Дата, написанная в имени файла
+    человеком, и время последней записи файла на диск — сведения очень разного
+    качества, а подставляются они в одно и то же поле. Тот, кто увидит
+    подставленное, должен понимать, чему он верит: дату совещания подписывают
+    в документе, и молча подсунутая туда дата копирования файла хуже пустой
+    строки.
+    """
+
+    day: date
+    #: Время как «10:00». Пусто, если известен только день: приписать
+    #: совещанию час, которого никто не называл, нельзя.
+    clock: str = ""
+    #: Откуда взято — человеческими словами, для подписи под полем.
+    source: str = ""
+
+    def as_text(self) -> str:
+        """Дата и время так, как их вписывают в шапку протокола."""
+        return f"{as_text(self.day)}, {self.clock}" if self.clock else as_text(self.day)
+
+
+def date_from_name(name: str) -> Recorded | None:
+    """Дата совещания из имени файла записи.
+
+    Имя даёт человек или программа записи, и дата в нём почти всегда есть:
+    «Совещание 07.09.2026.mp4», «2026-09-07 10-30 штаб.mkv»,
+    «GMT20260907-070012_Recording.mp4». Признак это надёжный: он переживает
+    и копирование, и перекодирование, от которых даты в свойствах файла
+    сбрасываются на день копии.
+    """
+    text = str(name or "")
+    for pattern, day_first in ((_NAME_DMY, True), (_NAME_YMD, False)):
+        for found in pattern.finditer(text):
+            first, second, third = (int(group) for group in found.groups())
+            day = _make(first, second, third) if day_first else _make(third, second, first)
+            if day is None:
+                continue
+            clock = _NAME_CLOCK.match(text[found.end():])
+            if not clock:
+                return Recorded(day, source="из имени файла")
+            hour, minute = int(clock.group(1)), int(clock.group(2))
+            if text[: found.start()].upper().endswith("GMT"):
+                # Zoom называет записи по Гринвичу. Оставить как есть значило
+                # бы вписать в протокол время, которого на совещании не было:
+                # «GMT20260907-070012» — это десять утра по Москве.
+                moment = datetime(
+                    day.year, day.month, day.day, hour, minute, tzinfo=timezone.utc
+                ).astimezone()
+                return Recorded(moment.date(), moment.strftime("%H:%M"), "из имени файла")
+            return Recorded(day, f"{hour:02d}:{minute:02d}", "из имени файла")
+    return None
+
 
 _DOTTED = re.compile(r"\b(\d{1,2})[.\-/](\d{1,2})(?:[.\-/](\d{2,4}))?\b")
 _DAY_MONTH = re.compile(r"\b(\d{1,2})\s+([а-яё]{3,})", re.IGNORECASE)

@@ -27,6 +27,7 @@ from loguru import logger
 from .blocks import Transcript, blocks_from_segments, consolidate
 from .checks import suspicious
 from .config import HF_TOKEN_ENV, Settings
+from .journal import setup_file_log
 from .llm import LLMClient
 from .audio import AudioError, ffmpeg_available
 from .people import merge_suggestions, mentioned_people, read_people
@@ -481,6 +482,10 @@ COMMANDS = {
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    # До разбора команды: журнал должен застать и её саму, и всё, что
+    # случится дальше. Недоступная папка работу не остановит.
+    base = Settings.load()
+    setup_file_log(base.log_dir, base.log_level)
     try:
         return COMMANDS[args.command](args)
     except MissingToken as exc:

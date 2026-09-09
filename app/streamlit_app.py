@@ -37,6 +37,7 @@ from minuteforge.config import (  # noqa: E402
     Settings,
 )  # noqa: E402
 from minuteforge.dates import date_from_name  # noqa: E402
+from minuteforge.journal import setup_file_log  # noqa: E402
 from minuteforge.llm import LLMClient, is_embedder, same_model  # noqa: E402
 from minuteforge.people import (  # noqa: E402
     merge_suggestions,
@@ -79,6 +80,14 @@ OUTPUT_DIR = Path(BASE.output_dir) if Path(BASE.output_dir).is_absolute() else R
 
 #: Что считаем записью совещания при выборе файла с диска.
 MEDIA_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v", ".wav", ".m4a", ".mp3"}
+
+# Журнал заводится сразу: у интерфейса, запущенного ярлыком, консоли,
+# считай, нет — окно закрывают, и разбираться потом не с чем. Повторный
+# вызов на перезапуске сценария ничего не делает.
+LOG_DIR = setup_file_log(
+    Path(BASE.log_dir) if Path(BASE.log_dir).is_absolute() else ROOT / BASE.log_dir,
+    BASE.log_level,
+)
 
 st.set_page_config(page_title=BASE.app_title, page_icon="📝", layout="wide")
 
@@ -909,6 +918,13 @@ if st.button("Собрать протокол", type="primary"):
         tasks = _free_name(folder / f"{stem}_поручения.csv")
         tasks.write_text(protocol.tasks_csv(), encoding="utf-8-sig")
         written = {"protocol": document, "tasks": tasks}
+        # Записка о разборе кладётся и здесь: своя форма протокола на неё
+        # не влияет, а нужна она ровно тогда, когда протокол вышел не таким,
+        # как ждали.
+        if protocol.journal is not None:
+            notes = _free_name(folder / f"{stem}_разбор.md")
+            notes.write_text(protocol.journal.as_markdown(), encoding="utf-8")
+            written["journal"] = notes
     st.session_state["saved_protocol"] = written
     st.session_state["protocol"] = protocol
 
@@ -964,6 +980,15 @@ if protocol is not None:
         folder = Path(next(iter(written.values()))).parent
         st.success(f"Протокол сохранён в `{folder}`")
         st.markdown("\n".join(f"- `{Path(path).name}`" for path in written.values()))
+        if "journal" in written:
+            st.caption(
+                f"`{Path(written['journal']).name}` — не документ: это запись "
+                "разбора по стадиям. Смотрите её, когда поручение, которое "
+                "точно звучало, в протокол не попало: там видно, на каком "
+                "шаге оно исчезло и из каких окон модель не вернула ничего."
+            )
+        if LOG_DIR:
+            st.caption(f"Журнал работы: `{LOG_DIR}`")
         freed = st.session_state.get("freed")
         if freed:
             st.caption(

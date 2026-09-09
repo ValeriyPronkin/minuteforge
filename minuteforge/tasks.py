@@ -1046,6 +1046,7 @@ def extract_tasks(
     answers: list[str] | None = None,
     corpus: str | None = None,
     chair: str = "",
+    journal=None,
 ) -> list[Task]:
     """Проходит по кускам стенограммы и собирает поручения.
 
@@ -1064,6 +1065,9 @@ def extract_tasks(
         нашлось, это единственный способ понять почему: модель могла
         ответить прозой, по-английски или пересказать задание вместо
         ответа — и всё это выглядит одинаково, как пустой результат.
+    :param journal: куда записать ход разбора по стадиям. Без него видно
+        только начало и конец, и «модель не нашла» неотличимо от «нашла, а
+        мы отсеяли»: пункта нет в обоих случаях.
     """
     collected: list[Task] = []
     total = len(chunks) or 1
@@ -1094,6 +1098,8 @@ def extract_tasks(
             if not skip_failed:
                 raise
             logger.warning("Фрагмент {}/{} пропущен: {}", chunk.index, chunk.total, exc)
+            if journal is not None:
+                journal.window(chunk, f"(запрос не удался: {exc})", 0)
             report(progress, Step(
                 name="chunk",
                 title=f"{title} — пропущен: {exc}",
@@ -1146,6 +1152,8 @@ def extract_tasks(
             "Фрагмент {}/{}: поручений {}, ответ за {} с",
             chunk.index, chunk.total, len(found), reply.elapsed_s,
         )
+        if journal is not None:
+            journal.window(chunk, reply.text, len(found))
         collected.extend(found)
         report(progress, Step(
             name="chunk",
@@ -1156,10 +1164,22 @@ def extract_tasks(
         ))
 
     whole = dedupe(collected)
+    if journal is not None:
+        journal.step(
+            "Снятие буквальных повторов", collected, whole,
+            why="Окна пересекаются соседними фразами, и одно поручение "
+            "приезжает из двух окон слово в слово.",
+        )
     merged = keep_meaningful(whole)
     if len(merged) != len(whole):
         logger.info(
             "Отсеяно как обломок из одного слова: {}", len(whole) - len(merged)
+        )
+    if journal is not None:
+        journal.step(
+            "Отсев обломков из одного слова", whole, merged,
+            why="«Подтвердить» без предмета — не задание: ни разослать, ни "
+            "спросить.",
         )
     heard = keep_directives(merged)
     if len(heard) != len(merged):
@@ -1170,15 +1190,33 @@ def extract_tasks(
             "ни повелительного наклонения",
             len(merged) - len(heard), len(merged),
         )
+    if journal is not None:
+        journal.step(
+            "Отсев не поручений", merged, heard,
+            why="В реплике-источнике нет ни просьбы, ни повелительного "
+            "наклонения — значит, поручения в ней не звучало.",
+        )
     single = one_per_place(heard)
     if len(single) != len(heard):
         logger.info("Склеено по месту разговора: {}", len(heard) - len(single))
+    if journal is not None:
+        journal.step(
+            "Склейка по месту разговора", heard, single,
+            why="Одно и то же поручение, выписанное из двух пересекающихся "
+            "окон разными словами.",
+        )
     if settings is None or getattr(settings, "one_task_per_phrase", True):
         together = one_per_phrase(single)
         if len(together) != len(single):
             logger.info(
                 "Сведено в один пункт как сказанное одной фразой: {} -> {}",
                 len(single), len(together),
+            )
+        if journal is not None:
+            journal.step(
+                "Сведение сказанного одной фразой", single, together,
+                why="Несколько действий в одной фразе — один пункт: адресат "
+                "один и срок один.",
             )
         single = together
     named = with_due(with_addressee(single, chair=chair))
@@ -1188,12 +1226,32 @@ def extract_tasks(
     dated = sum(1 for was, now in zip(single, named) if not was.due and now.due)
     if dated:
         logger.info("Срок взят из реплики: {} поручений", dated)
+    if journal is not None:
+        journal.step(
+            "Исполнитель и срок из реплики", single, named,
+            why=f"Исполнитель взят из обращения: {added}. "
+            f"Срок взят из реплики: {dated}. Пункты при этом не убывают.",
+        )
     single = named
     if settings is not None and getattr(settings, "merge_similar", False) and single:
+        before = single
         single = merge_similar(single, client, json_mode=bool(json_mode))
+        if journal is not None:
+            journal.step(
+                "Сведение повторов моделью", before, single,
+                why="Одно поручение, сказанное разными словами в разных "
+                "окнах. Решает модель, сливает код.",
+            )
     if settings is not None and getattr(settings, "verify_tasks", False) and single:
         report(progress, Step(name="verify", title="Проверяю поручения", share=1.0))
+        before = single
         single = verify(single, client, json_mode=bool(json_mode))
+        if journal is not None:
+            journal.step(
+                "Проверка «поручение или доклад»", before, single,
+                why="По каждому пункту модель отвечала, поручение это или "
+                "изложение доклада. Снятое — то, что она сочла докладом.",
+            )
     return single
 
 

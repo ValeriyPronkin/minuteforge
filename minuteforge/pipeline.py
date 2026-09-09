@@ -32,6 +32,7 @@ from .checks import Suspicion, suspicious
 from .chunking import estimate_tokens, split_into_chunks, split_into_windows
 from .config import Settings
 from . import dates
+from .journal import Journal
 from .llm import LLMClient
 from .people import Person
 from . import regions
@@ -305,9 +306,10 @@ def protocol_from_transcript(
     chair = most_addressed(for_model)
     if chair:
         logger.info("Совещание ведёт {} — в исполнители не пойдёт", chair)
+    record = Journal()
     tasks = extract_tasks(
         chunks, client, progress=progress, answers=answers,
-        corpus=named.as_text(), chair=chair,
+        corpus=named.as_text(), chair=chair, journal=record,
     )
     logger.info("Найдено поручений: {}", len(tasks))
 
@@ -328,7 +330,7 @@ def protocol_from_transcript(
         len({name for _, name in marks if name}), with_region,
     )
 
-    return build_protocol(
+    protocol = build_protocol(
         tasks,
         named,
         title=meeting.title,
@@ -341,6 +343,8 @@ def protocol_from_transcript(
         people=meeting.people,
         answers=answers,
     )
+    protocol.journal = record
+    return protocol
 
 
 def process(
@@ -583,6 +587,13 @@ def save(
     table.write_text(protocol.tasks_csv(), encoding="utf-8-sig")
 
     saved = {"protocol": document, "tasks": table}
+
+    if protocol.journal is not None:
+        # Отдельным файлом и с говорящим именем: это не документ и не для
+        # рассылки, а рабочая записка для того, кто настраивает разбор.
+        report = _free_name(out_dir / f"{stem}_разбор.md")
+        report.write_text(protocol.journal.as_markdown(), encoding="utf-8")
+        saved["journal"] = report
 
     if with_transcript and protocol.transcript is not None:
         transcript = out_dir / f"{stem}_стенограмма.txt"

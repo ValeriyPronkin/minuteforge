@@ -695,3 +695,30 @@ def test_a_date_that_is_nowhere_is_not_invented(tmp_path, monkeypatch):
     """Пусть лучше впишут руками, чем документ уйдёт с выдуманной датой."""
     monkeypatch.setattr("minuteforge.pipeline.recorded_at", lambda source: None)
     assert recorded_when(tmp_path / "запись.mp4") is None
+
+
+def test_the_run_is_written_down_stage_by_stage():
+    """Иначе «модель не нашла» неотличимо от «нашла, а мы отсеяли»."""
+    protocol = protocol_from_transcript(transcript(), Settings(), client=FakeClient())
+
+    assert protocol.journal is not None
+    assert protocol.journal.windows, "окна должны быть записаны с ответами модели"
+    assert protocol.journal.steps, "стадии разбора тоже"
+
+
+def test_the_run_notes_are_saved_next_to_the_protocol(tmp_path):
+    """Отдельным файлом: это не документ и не для рассылки, а записка для
+    того, кто настраивает разбор."""
+    protocol = protocol_from_transcript(transcript(), Settings(), client=FakeClient())
+    paths = save(protocol, tmp_path, stem="протокол")
+
+    assert paths["journal"].name == "протокол_разбор.md"
+    assert "Воронка" in paths["journal"].read_text(encoding="utf-8")
+
+
+def test_a_protocol_without_notes_saves_as_before(tmp_path):
+    """Протокол, собранный из готовой стенограммы без разбора, записки не
+    имеет — и файл появляться не должен."""
+    paths = save(Protocol(title="Протокол"), tmp_path, stem="протокол")
+
+    assert "journal" not in paths

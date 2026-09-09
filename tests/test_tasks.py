@@ -1422,3 +1422,86 @@ def test_a_task_with_a_named_day_is_not_put_to_the_check():
     kept = verify([dated, dated, plain, plain], Refuses())
     assert dated in kept, "пункт со сроком проверка не трогает"
     assert plain not in kept
+
+
+def test_the_check_can_be_done_by_another_model():
+    """Выписывать и проверять — разные задачи. Щедрая модель находит
+    больше, строгая реже ошибается; когда это две разные модели, каждая
+    делает своё."""
+    from minuteforge.chunking import Chunk
+    from minuteforge.config import Settings
+
+    class Writer:
+        settings = Settings(llm_json_mode=False, verify_tasks=True, merge_similar=False)
+
+        def __init__(self):
+            self.unloaded = False
+            self.asked = []
+
+        def complete(self, system, user, **kwargs):
+            self.asked.append(user)
+            if user == "Готов?":
+                return Reply(text="Да")
+            return Reply(text="Поручение: Подготовить план работ\nКому: \nСрок: ")
+
+        def unload(self):
+            self.unloaded = True
+            return True
+
+    class Checker:
+        settings = Writer.settings
+
+        def __init__(self):
+            self.asked = []
+
+        def complete(self, system, user, **kwargs):
+            self.asked.append(user)
+            return Reply(text="да")
+
+    writer, checker = Writer(), Checker()
+    chunk = Chunk(
+        blocks=[Block("SPEAKER_02", "Иванов, подготовьте план работ.", 0.0, 10.0)],
+        index=1, total=1,
+    )
+    found = extract_tasks([chunk], writer, verifier=checker)
+
+    assert [t.what for t in found] == ["Подготовить план работ"]
+    assert checker.asked, "проверять должна вторая модель"
+    assert not any("Стенограмма:" in q for q in checker.asked), (
+        "выписывать её не просили"
+    )
+    assert writer.unloaded, "первую модель надо выгрузить, иначе двум не хватит карты"
+
+
+def test_one_model_does_both_when_no_second_is_set():
+    """Без отдельной модели проверки ничего не меняется — и выгружать
+    нечего: та же модель работает дальше."""
+    from minuteforge.chunking import Chunk
+    from minuteforge.config import Settings
+
+    class Both:
+        settings = Settings(llm_json_mode=False, verify_tasks=True, merge_similar=False)
+
+        def __init__(self):
+            self.unloaded = False
+
+        def complete(self, system, user, **kwargs):
+            if user == "Готов?":
+                return Reply(text="Да")
+            if "Выписанный пункт" in user:
+                return Reply(text="да")
+            return Reply(text="Поручение: Подготовить план работ\nКому: \nСрок: ")
+
+        def unload(self):
+            self.unloaded = True
+            return True
+
+    client = Both()
+    chunk = Chunk(
+        blocks=[Block("SPEAKER_02", "Иванов, подготовьте план работ.", 0.0, 10.0)],
+        index=1, total=1,
+    )
+    found = extract_tasks([chunk], client)
+
+    assert [t.what for t in found] == ["Подготовить план работ"]
+    assert not client.unloaded

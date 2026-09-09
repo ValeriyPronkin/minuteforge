@@ -416,6 +416,30 @@ with st.sidebar:
         )
         llm_model = st.text_input("Модель", BASE.llm_model)
 
+    # Выписывать и проверять — разные задачи, и модели для них хороши
+    # разные. Щедрая находит больше, строгая реже ошибается.
+    SAME = "— та же —"
+    verify_choices = [SAME, *installed] if installed else [SAME]
+    verify_default = next(
+        (i for i, name in enumerate(verify_choices)
+         if BASE.llm_verify_model and same_model(name, BASE.llm_verify_model)),
+        0,
+    )
+    llm_verify_model = st.selectbox(
+        "Модель для проверки",
+        verify_choices,
+        index=verify_default,
+        help="Проверочный проход спрашивает по каждому найденному пункту: "
+        "поручение это или изложение доклада. Задача обратная выписке — там "
+        "нужна щедрость, здесь строгость, — и модели для них хороши разные. "
+        "На записи штаба mistral нашёл 79% поручений против 39% у модели "
+        "вчетверо крупнее, зато та ошибалась вдвое реже там, где отвечала. "
+        "Модели меняются в памяти один раз: проверка идёт после всей выписки, "
+        "и первая перед этим выгружается.",
+    )
+    if llm_verify_model == SAME:
+        llm_verify_model = ""
+
     # Предел сервера важнее окна модели: Ollama по умолчанию держит num_ctx
     # небольшим и молча отрезает всё сверх него — модель не видит конца
     # фрагмента и половины поручений в нём.
@@ -541,6 +565,7 @@ settings = Settings(
     speakers=int(speakers) or None,
     llm_base_url=llm_url,
     llm_model=llm_model,
+    llm_verify_model=llm_verify_model,
     llm_context_tokens=int(context),
     chunk_max_tokens=1200 if fine else BASE.chunk_max_tokens,
     prompt_extra=prompt_extra,

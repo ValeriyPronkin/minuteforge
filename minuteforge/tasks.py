@@ -1173,6 +1173,7 @@ def extract_tasks(
     chair: str = "",
     journal=None,
     directory=None,
+    verifier=None,
 ) -> list[Task]:
     """Проходит по кускам стенограммы и собирает поручения.
 
@@ -1191,6 +1192,9 @@ def extract_tasks(
         нашлось, это единственный способ понять почему: модель могла
         ответить прозой, по-английски или пересказать задание вместо
         ответа — и всё это выглядит одинаково, как пустой результат.
+    :param verifier: чем проверять найденное. Пусто — тем же клиентом.
+        Выписывать и проверять — разные задачи, и модели для них хороши
+        разные.
     :param directory: справочник направлений. По нему опознаётся обращение
         к организации — «Коллеги Ростовской области, просьба подтвердить»;
         без него такое обращение адресатом не считается.
@@ -1373,8 +1377,16 @@ def extract_tasks(
             )
     if settings is not None and getattr(settings, "verify_tasks", False) and single:
         report(progress, Step(name="verify", title="Проверяю поручения", share=1.0))
+        checker = verifier or client
+        if checker is not client:
+            # Первую модель выгружаем: на карте, где две не помещаются
+            # вдвоём, вторая иначе ляжет половиной слоёв на процессор.
+            # Момент подходящий — выписка кончилась, больше она не нужна.
+            unload = getattr(client, "unload", None)
+            if callable(unload):
+                unload()
         before = single
-        single = verify(single, client, json_mode=bool(json_mode))
+        single = verify(single, checker, json_mode=bool(json_mode))
         if journal is not None:
             journal.step(
                 "Проверка «поручение или доклад»", before, single,

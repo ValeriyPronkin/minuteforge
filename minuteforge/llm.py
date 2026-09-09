@@ -298,6 +298,31 @@ class LLMClient:
             str(item.get("id")) for item in items if isinstance(item, dict) and item.get("id")
         )
 
+    def unload(self) -> bool:
+        """Просит сервер выгрузить модель из видеопамяти.
+
+        Нужно на карте, где две модели разом не помещаются: выписывает
+        поручения одна, проверяет другая, и между стадиями первую надо
+        убрать. Ollama и сама вытеснит её, когда не хватит места, но
+        по-своему и не сразу — а на восьми гигабайтах «не сразу» означает,
+        что вторая модель половиной слоёв ляжет на процессор.
+
+        Спрашивается у родного интерфейса Ollama: в OpenAI-совместимом
+        такого нет. Не ответил — значит там не Ollama, и ничего страшного.
+        """
+        root = self.base_url.rsplit("/v1", 1)[0]
+        try:
+            response = self._session.post(
+                f"{root}/api/generate",
+                json={"model": self.settings.llm_model, "keep_alive": 0},
+                headers=self._headers(),
+                timeout=30,
+            )
+            return getattr(response, "status_code", 0) == 200
+        except Exception as exc:
+            logger.info("Выгрузить модель не удалось: {}", exc)
+            return False
+
     def context_window(self) -> tuple[int | None, int | None]:
         """Сколько текста модель примет на самом деле.
 

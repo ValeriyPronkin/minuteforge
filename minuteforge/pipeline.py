@@ -35,7 +35,7 @@ from . import dates
 from .directory import read_directory, at as unit_at
 from .journal import Journal
 from .vocabulary import read_vocabulary
-from .llm import LLMClient
+from .llm import LLMClient, same_model
 from .people import Person
 from .protocol import Protocol, build_protocol
 from .tasks import (
@@ -324,10 +324,22 @@ def protocol_from_transcript(
             settings.directory_label,
         )
 
+    # Выписывать и проверять — разные задачи. Щедрая модель находит
+    # больше, строгая реже ошибается; когда это две разные модели, каждая
+    # делает своё. Меняются они в памяти один раз: проверка идёт после всей
+    # выписки.
+    checker = None
+    if settings.llm_verify_model and not same_model(
+        settings.llm_verify_model, settings.llm_model
+    ):
+        checker = LLMClient(replace(settings, llm_model=settings.llm_verify_model))
+        logger.info("Проверять поручения будет {}", settings.llm_verify_model)
+
     record = Journal()
     tasks = extract_tasks(
         chunks, client, progress=progress, answers=answers,
         corpus=named.as_text(), chair=chair, journal=record, directory=units,
+        verifier=checker,
     )
     logger.info("Найдено поручений: {}", len(tasks))
 

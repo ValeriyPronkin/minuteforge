@@ -528,14 +528,14 @@ def test_paraphrases_of_one_task_are_merged():
 
     tasks = [
         Task("Подтвердить статус дорожной карты", "", "", chunk=2),
-        Task("Проинформировать о текущем статусе реализации дорожной карты", "Голованова", "", chunk=1),
+        Task("Проинформировать о текущем статусе реализации дорожной карты", "Ларина", "", chunk=1),
         Task("Направить письмо в министерство", "Ким С.А.", "сегодня", chunk=3),
     ]
     merged = merge_similar(tasks, merged_client('{"groups": [[1, 2], [3]]}'))
 
     assert len(merged) == 2
     assert merged[0].what == "Проинформировать о текущем статусе реализации дорожной карты"
-    assert merged[0].who == "Голованова", "исполнитель берётся оттуда, где он есть"
+    assert merged[0].who == "Ларина", "исполнитель берётся оттуда, где он есть"
 
 
 def test_forgotten_task_survives():
@@ -733,7 +733,7 @@ def test_assignee_named_far_away_is_not_kept():
     from minuteforge.tasks import attach_source
 
     chunk = Chunk([
-        Block("Голованова А.Н.", "Передача возможна после согласования.", 100, 160),
+        Block("Ларина А.Н.", "Передача возможна после согласования.", 100, 160),
     ], index=1, total=1)
 
     task = attach_source(
@@ -965,9 +965,9 @@ def test_the_addressee_is_taken_from_the_start_of_the_phrase():
     """
     from minuteforge.tasks import addressee
 
-    assert addressee("Светлана Дина, просьба обозначить срок ввода.") == "Светлана Дина"
-    assert addressee("Эмир Нурдинович, подтвердите наличие воды.") == "Эмир Нурдинович"
-    assert addressee("Так, Ирина Анатольевна, пригласите их на совещание.") == "Ирина Анатольевна"
+    assert addressee("Наталья Ковач, просьба обозначить срок ввода.") == "Наталья Ковач"
+    assert addressee("Ильдар Наилевич, подтвердите наличие воды.") == "Ильдар Наилевич"
+    assert addressee("Так, Ольга Аркадьевна, пригласите их на совещание.") == "Ольга Аркадьевна"
     assert addressee("Коллеги Ростовской области, просьба подтвердите срок.") == "Ростовской области"
     assert addressee("Коллеги, просьба подтвердить объекты.") == "все участники"
 
@@ -982,7 +982,7 @@ def test_a_name_in_the_middle_is_not_an_addressee():
 
     assert addressee("Принято, продолжаем дальше.") == ""
     assert addressee("Организуйте сейчас фотоотчет, вот прямо сейчас.") == ""
-    assert addressee("По докладам, которые Евгений Александрович предоставляет, видно.") == ""
+    assert addressee("По докладам, которые Виктор Аркадьевич предоставляет, видно.") == ""
 
 
 def test_the_model_keeps_its_own_assignee():
@@ -990,13 +990,13 @@ def test_the_model_keeps_its_own_assignee():
     from minuteforge.tasks import Task, with_addressee
 
     tasks = [
-        Task(what="Подтвердить срок", quote="Светлана Дина, просьба подтвердить срок."),
+        Task(what="Подтвердить срок", quote="Наталья Ковач, просьба подтвердить срок."),
         Task(what="Подтвердить срок", who="Ростовская область",
-             quote="Светлана Дина, просьба подтвердить срок."),
+             quote="Наталья Ковач, просьба подтвердить срок."),
     ]
     filled = with_addressee(tasks)
 
-    assert filled[0].who == "Светлана Дина"
+    assert filled[0].who == "Наталья Ковач"
     assert filled[1].who == "Ростовская область"
 
 
@@ -1071,7 +1071,7 @@ def test_a_one_word_order_is_not_an_order():
 def test_the_chair_is_not_given_orders():
     """Докладчик открывает речь обращением к ведущему.
 
-    «Жабулат Хизирович, ранее отмечали… Предлагаю уточнить у региона, кто
+    «Хамзатбек Ханифович, ранее отмечали… Предлагаю уточнить у региона, кто
     отвечает за площадки» — поручение здесь региону, а в протоколе стоял
     исполнителем ведущий.
     """
@@ -1079,19 +1079,19 @@ def test_the_chair_is_not_given_orders():
     from minuteforge.tasks import Task, most_addressed, with_addressee
 
     blocks = [
-        Block("SPEAKER_12", "Джамбулат Хизирович, разрешите доложить.", 0, 10),
-        Block("SPEAKER_08", "Джамбулат Хизирович, объект готов на 84%.", 10, 20),
-        Block("SPEAKER_11", "Джамбулат Хизирович, если позволите.", 20, 30),
+        Block("SPEAKER_12", "Гамзатбек Ханифович, разрешите доложить.", 0, 10),
+        Block("SPEAKER_08", "Гамзатбек Ханифович, объект готов на 84%.", 10, 20),
+        Block("SPEAKER_11", "Гамзатбек Ханифович, если позволите.", 20, 30),
     ]
     chair = most_addressed(blocks)
-    assert chair == "Джамбулат Хизирович"
+    assert chair == "Гамзатбек Ханифович"
 
     task = Task(
         what="Уточнить, кто отвечает за площадки",
-        quote="Джамбулат Хизирович, предлагаю уточнить у региона.",
+        quote="Гамзатбек Ханифович, предлагаю уточнить у региона.",
     )
     assert with_addressee([task], chair=chair)[0].who == ""
-    assert with_addressee([task])[0].who == "Джамбулат Хизирович", (
+    assert with_addressee([task])[0].who == "Гамзатбек Ханифович", (
         "без ведущего правило работает как прежде"
     )
 
@@ -1107,17 +1107,17 @@ def test_a_single_greeting_does_not_make_a_chair():
 def test_one_chair_heard_four_ways_is_one_person():
     """Распознавание коверкает имя, и ведущий приезжает четырьмя людьми.
 
-    Сравнивать строки целиком нельзя: «Андрей Николаевич» и «Антон
-    Николаевич» похожи сильнее, чем «Джамбулат Хизирович» и «Шамбулат
-    Кириллович», — а первые двое разные люди. Различает их имя, не отчество.
+    Сравнивать строки целиком нельзя: «Андрей Петрович» и «Антон
+    Николаевич» похожи сильнее, чем «Гамзатбек Ханифович» и «Хамзатбег
+    Кариллович», — а первые двое разные люди. Различает их имя, не отчество.
     """
     from minuteforge.tasks import same_person
 
-    assert same_person("Джамбулат Хизирович", "Шамбулат Кириллович")
-    assert same_person("Джамбулат Хизирович", "Жабулат Хизирович")
-    assert same_person("Эмир Нурдинович", "Эмир Нурденович")
-    assert not same_person("Андрей Николаевич", "Антон Николаевич")
-    assert not same_person("Андрей Николаевич", "Анатолий Николаевич")
+    assert same_person("Гамзатбек Ханифович", "Хамзатбег Кариллович")
+    assert same_person("Гамзатбек Ханифович", "Хамзатбек Ханифович")
+    assert same_person("Ильдар Наилевич", "Ильдар Наилович")
+    assert not same_person("Андрей Петрович", "Антон Петрович")
+    assert not same_person("Андрей Петрович", "Анатолий Петрович")
 
 
 def test_the_deadline_is_taken_from_the_phrase():

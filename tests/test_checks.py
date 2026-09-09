@@ -6,7 +6,7 @@ from minuteforge.checks import suspicious
 
 def test_looping_model_is_caught():
     """Зацикливание — главная примета выдумки: пять раз подряд одно и то же."""
-    line = "Шамбулат Кириллович, Эктехнопарк Богочанский. " * 5
+    line = "Хамзатбег Кариллович, Экотехнопарк Северный. " * 5
     found = suspicious([Block("SPEAKER_29", f"Добрый день. {line}", 8582.0, 8600.0)])
 
     assert len(found) == 1

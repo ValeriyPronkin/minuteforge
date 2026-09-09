@@ -192,7 +192,7 @@ def test_position_ends_where_the_position_ends():
     from minuteforge.people import mentioned_people
 
     found = mentioned_people(
-        "Павленко Андрей Васильевич, заместитель мэра города Биробиджан, вы с нами сегодня?"
+        "Орлов Виктор Павлович, заместитель мэра города Биробиджан, вы с нами сегодня?"
     )
 
     assert found[0].position == "заместитель мэра города Биробиджан"
@@ -220,9 +220,9 @@ def test_a_name_heard_again_is_trusted():
     from minuteforge.people import suggest_speakers
 
     guesses = suggest_speakers([
-        Block("SPEAKER_09", "Голованова Александра Николаевна, здравствуйте."),
+        Block("SPEAKER_09", "Ларина Александра Николаевна, здравствуйте."),
         Block("SPEAKER_19", "Добрый день, коллеги."),
         Block("SPEAKER_02", "Александра Николаевна, у нас здесь задержка."),
     ])
 
-    assert guesses["SPEAKER_19"].name == "Голованова Александра Николаевна"
+    assert guesses["SPEAKER_19"].name == "Ларина Александра Николаевна"

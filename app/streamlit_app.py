@@ -15,6 +15,7 @@ import json
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import streamlit as st
@@ -522,11 +523,23 @@ with st.sidebar:
             "считать поручением у вас и как это называть."
         )
         prompt_extra = st.text_area(
-            "Дополнительно",
+            "Тому, кто выписывает",
             BASE.prompt_extra,
             placeholder="Поручения у нас называются заданиями.\n"
             "Не считай поручением просьбу подключиться или выступить.",
-            label_visibility="collapsed",
+        )
+        # Проверяющей нужны обратные указания: выписывающей объясняют, что
+        # считать поручением, а этой — что поручением не считается, хотя
+        # звучит похоже. Отсюда и отдельное поле: слитые в одно, они
+        # противоречили бы друг другу в каждом запросе.
+        verify_prompt_extra = st.text_area(
+            "Тому, кто проверяет",
+            BASE.verify_prompt_extra,
+            placeholder="Планы работ, о которых докладывают, поручением не "
+            "считай.\nПросьбу выступить на следующем заседании считай.",
+            help="Проверочный проход спрашивает по каждому пункту: поручение "
+            "это или изложение доклада. Сюда — то, что у вас звучит как "
+            "поручение, но им не является, и наоборот.",
         )
 
     if limit and int(context) > limit:
@@ -574,9 +587,12 @@ with st.sidebar:
 
     llm_url = st.session_state.get("llm_url", address)
 
-settings = Settings(
-    directory_file=BASE.directory_file,
-    directory_label=BASE.directory_label,
+# Поверх настроек из файла, а не вместо них. Собранные заново, они теряли
+# всё, чего нет на экране: words_file, verify_tasks, extract_by_phrase,
+# llm_temperature — вписанное в config.yaml молча заменялось умолчанием, и
+# заметить это было нельзя, потому что умолчания в файле и в коде совпадают.
+settings = replace(
+    BASE,
     asr_model=asr_model,
     language=language,
     speakers=int(speakers) or None,
@@ -586,9 +602,7 @@ settings = Settings(
     llm_context_tokens=int(context),
     chunk_max_tokens=1200 if fine else BASE.chunk_max_tokens,
     prompt_extra=prompt_extra,
-    prompt_file=BASE.prompt_file,
-    chunk_overlap_blocks=BASE.chunk_overlap_blocks,
-    offline_models=BASE.offline_models,
+    verify_prompt_extra=verify_prompt_extra,
 )
 
 # ---------------------------------------------------------------- шапка

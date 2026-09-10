@@ -465,6 +465,48 @@ def test_empty_extra_changes_nothing():
     assert plain == spaced
 
 
+def test_the_checker_gets_its_own_instructions():
+    """Проверяющей нужны обратные указания: не что считать поручением, а что
+    им не считается, хотя звучит похоже."""
+    from minuteforge.llm import Reply
+    from minuteforge.tasks import Task, verify
+
+    seen = []
+
+    class Judge:
+        def complete(self, system, user, **kwargs):
+            seen.append(system)
+            return Reply(text='{"order": true}')
+
+    verify(
+        [Task(what="Сдать объект", quote="Объект сдать в марте.",
+              context="Объект сдать в марте.")],
+        Judge(),
+        extra="«Объект сдать» — строка графика, а не поручение.",
+    )
+
+    assert "Дополнительно:\n«Объект сдать» — строка графика" in seen[0]
+    assert '{"order": true}' in seen[0], "правила формата остались на месте"
+
+
+def test_the_checker_without_instructions_is_asked_as_before():
+    from minuteforge.llm import Reply
+    from minuteforge.tasks import Task, verify
+
+    seen = []
+
+    class Judge:
+        def complete(self, system, user, **kwargs):
+            seen.append(system)
+            return Reply(text='{"order": true}')
+
+    task = Task(what="Подготовить справку", quote="Подготовьте.", context="Подготовьте.")
+    verify([task], Judge())
+    verify([task], Judge(), extra="   ")
+
+    assert seen[0] == seen[1]
+
+
 def test_own_prompt_replaces_the_built_in_one():
     """Для тех, кто понимает, что делает: правила формата придётся написать
     самому."""

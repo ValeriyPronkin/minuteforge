@@ -219,12 +219,20 @@ def build_prompt(
             header += f"Участники фрагмента: {', '.join(named)}."
         header += "\n\n"
     system = base or (EXTRACT_SYSTEM_JSON if json_mode else EXTRACT_SYSTEM)
-    if extra.strip():
-        # В конец: последнее указание модель держит лучше всего. И отдельным
-        # разделом, чтобы человек, дописавший своё, видел, где оно кончается
-        # и начинается наше.
-        system = f"{system}\n\nДополнительно:\n{extra.strip()}"
-    return system, f"{header}Стенограмма:\n{chunk.text}"
+    return with_extra(system, extra), f"{header}Стенограмма:\n{chunk.text}"
+
+
+def with_extra(system: str, extra: str) -> str:
+    """Дописывает своё указание к системному.
+
+    В конец: последнее указание модель держит лучше всего. И отдельным
+    разделом, чтобы человек, дописавший своё, видел, где оно кончается и
+    начинается наше. Правила формата ответа при этом остаются на месте: их
+    изменение сломало бы разбор, а человек не понял бы почему.
+    """
+    if not (extra or "").strip():
+        return system
+    return f"{system}\n\nДополнительно:\n{extra.strip()}"
 
 
 def parse_tasks(answer: str, *, chunk: int = 0) -> list[Task]:
@@ -1386,7 +1394,10 @@ def extract_tasks(
             if callable(unload):
                 unload()
         before = single
-        single = verify(single, checker, json_mode=bool(json_mode))
+        single = verify(
+            single, checker, json_mode=bool(json_mode),
+            extra=getattr(settings, "verify_prompt_extra", "") or "",
+        )
         if journal is not None:
             journal.step(
                 "Проверка «поручение или доклад»", before, single,
@@ -1789,6 +1800,7 @@ def verify(
     client: LLMClient,
     *,
     json_mode: bool = True,
+    extra: str = "",
 ) -> list[Task]:
     """Спрашивает модель по каждому пункту: поручение это или доклад.
 
@@ -1803,10 +1815,17 @@ def verify(
 
     Сбой запроса — пункт остаётся: молчание сервера не повод вычеркнуть
     поручение.
+
+    :param extra: что добавить к указаниям проверяющей модели. Своё здесь
+        нужно не то же, что на выписке: там объясняют, что считать
+        поручением, здесь — что у вас поручением не считается, хотя звучит
+        похоже. «Объект сдать» на стройке — строка графика, «слышите ли
+        меня» у связистов — не просьба.
     """
     if not tasks:
         return list(tasks)
 
+    system = with_extra(VERIFY_SYSTEM, extra)
     kept: list[Task] = []
     dropped: list[Task] = []
     for task in tasks:
@@ -1824,7 +1843,7 @@ def verify(
         question = f"Кусок стенограммы:\n{source}\n\nВыписанный пункт: {task.what}"
         try:
             reply = client.complete(
-                VERIFY_SYSTEM, question,
+                system, question,
                 json_mode=json_mode,
                 schema=VERDICT_SCHEMA if json_mode else None,
             )

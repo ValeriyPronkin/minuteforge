@@ -167,7 +167,7 @@ def _cell(row: list[str], position: int | None) -> str:
 
 #: Отчества по-русски кончаются предсказуемо, и это самый надёжный признак
 #: того, что перед нами именно ФИО, а не просто два слова с большой буквы.
-_PATRONYMIC = r"[А-ЯЁ][а-яё]+(?:ович|евич|овна|евна|инична|ична|ьевич|ьевна)"
+PATRONYMIC = r"[А-ЯЁ][а-яё]+(?:ович|евич|овна|евна|инична|ична|ьевич|ьевна)"
 
 #: Три слова с большой буквы подряд. Правило грубее, но нужное: Whisper
 #: коверкает отчества — в живой расшифровке «Евгеньевна» приехала как
@@ -180,8 +180,8 @@ _THREE_CAPITALS = r"[А-ЯЁ][а-яё]{2,}\s+[А-ЯЁ][а-яё]{2,}\s+[А-ЯЁ][
 #: Валерьевич» и «Ольга Евгеньевна Белянина». Отчество — самый надёжный
 #: признак, поэтому оно проверяется первым.
 _FULL_NAME = re.compile(
-    rf"\b(?:[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s+{_PATRONYMIC}"
-    rf"|[А-ЯЁ][а-яё]+\s+{_PATRONYMIC}\s+[А-ЯЁ][а-яё]+"
+    rf"\b(?:[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s+{PATRONYMIC}"
+    rf"|[А-ЯЁ][а-яё]+\s+{PATRONYMIC}\s+[А-ЯЁ][а-яё]+"
     rf"|{_THREE_CAPITALS})\b"
 )
 
@@ -387,7 +387,7 @@ def _looks_like_person(name: str) -> bool:
     """
     parts = name.split()
     return any(is_given_name(part) for part in parts) or any(
-        re.fullmatch(_PATRONYMIC, part) for part in parts
+        re.fullmatch(PATRONYMIC, part) for part in parts
     )
 
 

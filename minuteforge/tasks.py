@@ -21,7 +21,7 @@ from typing import Iterable, Sequence
 from loguru import logger
 
 from .blocks import UNKNOWN, is_soundcheck
-from .people import is_given_name
+from .people import PATRONYMIC, is_given_name
 from .chunking import Chunk
 from .llm import LLMClient, LLMError
 from .progress import Progress, Step, report
@@ -995,6 +995,61 @@ def ordered_nearby(task: Task) -> bool:
     )
 
 
+#: Чем просьбу высказывают прямо. Список уже, чем :data:`DIRECTIVE_WORDS`:
+#: оттуда сюда не идут «необходимо», «должны», «нужно». Ими пересказывают
+#: нормы — «отходы должны накапливаться раздельно», — и соседняя фраза с
+#: таким словом спасала бы от отсева любой пункт рядом с собой.
+_ASKED = frozenset("""
+просьба прошу просим просил просила поручаю поручить поручается поручение
+требую требуем задача
+""".split())
+
+#: Обращение по имени-отчеству в начале фразы: «Андрей Николаевич, подойти
+#: более системно». Отчество — самый надёжный признак того, что это именно
+#: обращение к человеку, а не два слова с большой буквы.
+_ADDRESSED = re.compile(rf"^[А-ЯЁ][а-яё]+\s+{PATRONYMIC}\s*[,:]")
+
+
+def _told_infinitive(sentence: str, action: str) -> bool:
+    """Стоит ли в этой фразе то же действие, и стоит ли оно инфинитивом."""
+    return any(
+        word.startswith(action) and word.endswith(("ть", "ти", "чь"))
+        for word in re.findall(r"\w+", (sentence or "").lower())
+    )
+
+
+def asked_nearby(task: Task) -> bool:
+    """Просьба сказана одной фразой, а само дело — соседней.
+
+    «Алексей Вячеславович, просьба какая? Всем регионам вашу аналитику
+    разослать.» По отдельности поручения не слышно ни в одной фразе: в первой
+    нет дела, во второй нет повелительного наклонения — «разослать» стоит
+    инфинитивом. Вместе это поручение, и на живой записи так сказана каждая
+    десятая просьба: «Андрей Николаевич, подойти более системно с коллегой»,
+    «Всем регионам вашу аналитику разослать».
+
+    Отсев смотрел на фразу, а окно вокруг неё уже собрано — в нём и стоит
+    недостающая половина.
+
+    Проверка узкая, и обе её половины нужны. Инфинитив должен быть тем же
+    действием, что и в пункте, — иначе пункт спасался бы любым инфинитивом
+    из соседнего разговора. А рядом должна стоять либо прямая просьба, либо
+    обращение по имени-отчеству: «должны» и «необходимо» сюда не годятся,
+    ими пересказывают нормы, и на таком соседстве держится главный мусор
+    протокола.
+    """
+    action = _action(task.what)
+    if not action or not task.context:
+        return False
+    sentences = _sentences(task.context)
+    told = [phrase for phrase in sentences if _told_infinitive(phrase, action)]
+    if not told:
+        return False
+    if any(_ASKED & set(re.findall(r"\w+", phrase.lower())) for phrase in sentences):
+        return True
+    return any(_ADDRESSED.match(phrase.strip()) for phrase in told)
+
+
 def keep_directives(tasks: Iterable[Task]) -> list[Task]:
     """Оставляет поручения, которые слышны в реплике-источнике.
 
@@ -1013,6 +1068,7 @@ def keep_directives(tasks: Iterable[Task]) -> list[Task]:
         or is_directive(task.quote)
         or due_point(task.quote)
         or ordered_nearby(task)
+        or asked_nearby(task)
     ]
 
 
@@ -1334,8 +1390,8 @@ def extract_tasks(
     if journal is not None:
         journal.step(
             "Отсев не поручений", merged, heard,
-            why="В реплике-источнике нет ни просьбы, ни повелительного "
-            "наклонения — значит, поручения в ней не звучало.",
+            why="Ни в реплике-источнике, ни в окне вокруг неё нет ни просьбы, "
+            "ни повелительного наклонения — значит, поручения не звучало.",
         )
     single = one_per_place(heard)
     if len(single) != len(heard):

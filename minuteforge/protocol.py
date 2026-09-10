@@ -48,6 +48,11 @@ class Protocol:
     #: завода «Площадка», у холдинга «Общество» — форму разбора приносит
     #: организация, а не инструмент.
     unit_label: str = DEFAULT_LABEL
+    #: Кому адресовать поручения по каждому направлению: «Ставропольский
+    #: край» → «Правительству Ставропольского края». Берётся из справочника,
+    #: третьей его колонки. Нет записи — в документ идёт название как есть:
+    #: падежей инструмент не знает и склонять не берётся.
+    addressees: dict[str, str] = field(default_factory=dict)
     #: Ответы модели как есть. В документ не идут, нужны для разбора: когда
     #: поручений не нашлось, только по ним и видно, в чём дело.
     answers: list[str] = field(default_factory=list)
@@ -66,6 +71,20 @@ class Protocol:
         начать, а не вопрос, который надо выяснять.
         """
         return [t for t in self.tasks if t.who or t.unit]
+
+    @property
+    def decisions(self) -> list["Decision"]:
+        """Поручения, собранные по адресатам, — раздел «Решили».
+
+        В готовом документе поручения не лежат плоским списком. Они собраны
+        в пункты по тому, кому адресованы: один адресат — один пункт,
+        несколько поручений — подпунктами, и общий срок под ними. Так его
+        и исполняют: пункт целиком уходит в одну организацию.
+
+        Порядок — по ходу совещания, а не по алфавиту: разбор шёл по кругу,
+        и человек, слушавший его, ищет пункт там же, где он прозвучал.
+        """
+        return group_decisions(self.actionable, self.addressees)
 
     @property
     def needs_clarification(self) -> list[Task]:
@@ -162,6 +181,7 @@ class Protocol:
             "duration": f"{self.transcript.duration_min} мин" if self.transcript else "",
             "model": self.transcript.model if self.transcript else "",
             "tasks": "\n".join(_task_lines(self.actionable)),
+            "decisions": "\n".join(_decision_lines(self.decisions)),
             "unclear": "\n".join(f"- {t.what}" for t in self.needs_clarification),
             "tasks_table": "\n".join(_task_table(self.actionable, self.unit_label)),
             "tasks_count": str(len(self.tasks)),
@@ -254,6 +274,7 @@ def build_protocol(
     number: str = "",
     answers: Sequence[str] | None = None,
     unit_label: str = DEFAULT_LABEL,
+    addressees: dict[str, str] | None = None,
 ) -> Protocol:
     """Собирает протокол.
 
@@ -304,12 +325,114 @@ def build_protocol(
         transcript=transcript,
         answers=list(answers or []),
         unit_label=unit_label,
+        addressees=dict(addressees or {}),
     )
 
 
 def _is_label(name: str) -> bool:
     """Похоже ли это на метку диаризации, а не на человека."""
     return bool(re.match(r"^(SPEAKER[_ -]*\d+|UNKNOWN)$", (name or "").strip(), re.IGNORECASE))
+
+
+@dataclass
+class Decision:
+    """Пункт раздела «Решили»: кому и что поручено.
+
+    Отдельная сущность, а не строка текста: тот же пункт нужен и в разметке
+    протокола, и в шаблоне организации, и в выгрузке — а собирается он один
+    раз здесь.
+    """
+
+    addressee: str
+    tasks: list[Task] = field(default_factory=list)
+
+    @property
+    def due(self) -> str:
+        """Общий срок пункта. Пусто — сроки разные или их нет вовсе.
+
+        Разные сроки в одну строку не сводятся: «Срок: 10.09.2026» под
+        пунктом, где половина подпунктов к другому числу, — это не сокращение,
+        а подлог. Тогда срок пишется у каждого подпункта отдельно.
+        """
+        said = [_on_date(task) for task in self.tasks if task.due or task.due_date]
+        unique = list(dict.fromkeys(said))
+        return unique[0] if len(unique) == 1 and len(said) == len(self.tasks) else ""
+
+
+def group_decisions(
+    tasks: Sequence[Task],
+    addressees: dict[str, str] | None = None,
+) -> list[Decision]:
+    """Собирает поручения в пункты по адресатам.
+
+    Адресат берётся сначала из направления, и только потом из исполнителя.
+    Порядок именно такой: в документе поручают организации — «Правительству
+    такой-то области», — а названный вслух человек в ней работает. Он не
+    пропадает: в таблице поручений графа «Исполнитель» остаётся.
+    """
+    addressees = addressees or {}
+    order: list[str] = []
+    groups: dict[str, list[Task]] = {}
+    for task in tasks:
+        who = addressees.get(task.unit, task.unit) if task.unit else task.who
+        if not who:
+            continue
+        if who not in groups:
+            groups[who] = []
+            order.append(who)
+        groups[who].append(task)
+    return [Decision(addressee=who, tasks=groups[who]) for who in order]
+
+
+def _decision_lines(decisions: Sequence[Decision]) -> list[str]:
+    """Раздел «Решили» так, как он выглядит в документе."""
+    lines: list[str] = []
+    for number, point in enumerate(decisions, 1):
+        common = point.due
+        addressee = _upper_first(point.addressee)
+        if len(point.tasks) == 1 and not common:
+            # Одно поручение — в строку за двоеточием: заводить подпункт «а»
+            # при единственном пункте документу незачем.
+            lines.append(f"{number}. {addressee}: {_said(point.tasks[0])}.")
+            lines.append("")
+            continue
+        lines.append(f"{number}. {addressee}:")
+        for position, task in enumerate(point.tasks, 1):
+            said = _said(task)
+            if not common and (task.due or task.due_date):
+                said = f"{said}, срок — {_on_date(task)}"
+            end = "." if position == len(point.tasks) else ";"
+            lines.append(f"- {said}{end}")
+        if common:
+            lines.append(f"Срок: {common}.")
+        lines.append("")
+    return lines[:-1] if lines else ["Поручений не зафиксировано."]
+
+
+def _said(task: Task) -> str:
+    """Поручение так, как оно читается подпунктом: со строчной буквы."""
+    text = (task.what or "").strip().rstrip(".")
+    return text[:1].lower() + text[1:] if text else text
+
+
+def _upper_first(text: str) -> str:
+    """Адресат открывает пункт документа, а пункт начинается с большой буквы.
+
+    Именно первая буква, а не ``capitalize``: тот снёс бы заглавные внутри —
+    «Правительству Иркутской Области» превратилось бы в «области».
+    """
+    text = (text or "").strip()
+    return text[:1].upper() + text[1:] if text else text
+
+
+def _on_date(task: Task) -> str:
+    """Срок для документа: числом, если оно посчитано.
+
+    В таблице для вычитки полезно и сказанное вслух — «через две недели»
+    объясняет, откуда взялось число. В документе, по которому ставят на
+    контроль, нужна дата.
+    """
+    return task.due_date or task.due
 
 
 def _task_lines(tasks: Sequence[Task]) -> list[str]:

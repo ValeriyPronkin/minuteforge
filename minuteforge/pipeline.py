@@ -373,6 +373,7 @@ def protocol_from_transcript(
         people=meeting.people,
         answers=answers,
         unit_label=units.label,
+        addressees=units.addressees(),
     )
     protocol.journal = record
     return protocol

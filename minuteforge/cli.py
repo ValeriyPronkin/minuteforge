@@ -408,7 +408,7 @@ def command_protocol(args: argparse.Namespace) -> int:
     settings = settings_from(args)
     transcript = load_transcript(args.segments)
     protocol = _build(transcript, args, settings)
-    _report(protocol, save(protocol, args.out, template=args.template))
+    _report(protocol, save(protocol, args.out, template=args.template or settings.form_file))
     return 0
 
 
@@ -432,7 +432,7 @@ def command_run(args: argparse.Namespace) -> int:
         args.source, settings, work_dir=args.out, progress=print_step
     )
     protocol = _build(transcript, args, settings)
-    _report(protocol, save(protocol, args.out, template=args.template))
+    _report(protocol, save(protocol, args.out, template=args.template or settings.form_file))
     return 0
 
 

@@ -125,6 +125,13 @@ class Entry:
 
     name: str
     marks: tuple[str, ...] = ()
+    #: Кому адресуется поручение в готовом документе: «Правительству
+    #: Иркутской области», «Северному филиалу». Отдельно от названия, потому
+    #: что по-русски это другой падеж, а падежей инструмент не знает и
+    #: угадывать не должен: «Республике Саха (Якутия)» из «Республика Саха
+    #: (Якутия)» правилами не выводится. Пусто — в документ пойдёт название
+    #: как есть.
+    addressee: str = ""
 
     def patterns(self) -> list[re.Pattern]:
         return [_pattern(mark) for mark in (self.marks or (self.name,))]
@@ -180,6 +187,19 @@ class Directory:
             if found and found.start() == 0:
                 return name
         return ""
+
+    def addressees(self) -> dict[str, str]:
+        """Кому адресовать поручение по каждому направлению.
+
+        Только для тех, у кого адресат в справочнике задан. Пустые сюда не
+        идут: пустая запись и отсутствие записи должны вести себя одинаково —
+        в документ пойдёт название как есть.
+        """
+        return {
+            entry.name: entry.addressee
+            for entry in self.entries
+            if entry.addressee
+        }
 
     def follow(self, blocks: Sequence[object]) -> list[tuple[float, str]]:
         """Когда какое направление начали разбирать.
@@ -354,11 +374,18 @@ def _entries(lines: Iterable[str]) -> Iterable[Entry]:
             continue
         marks = tuple(
             mark.strip().lower()
-            for cell in cells[1:]
-            for mark in cell.split(",")
+            for mark in cells[1].split(",")
             if mark.strip()
+        ) if len(cells) > 1 else ()
+        # Третья колонка — кому адресовать. Всё, что дальше, не читается:
+        # лишние колонки в файле из Excel — обычное дело, и принимать их за
+        # созвучия значило бы искать в речи пустые строки и заметки.
+        addressee = cells[2] if len(cells) > 2 else ""
+        yield Entry(
+            name=name,
+            marks=marks or (name.lower(),),
+            addressee=addressee,
         )
-        yield Entry(name=name, marks=marks or (name.lower(),))
 
 
 #: Слова, которыми называют первую колонку. Заголовок надо пропустить, иначе

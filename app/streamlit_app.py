@@ -301,10 +301,12 @@ with st.sidebar:
     template_file = st.file_uploader(
         "Форма протокола (md или txt)",
         type=["md", "txt"],
-        help="Ваша форма документа с местами вида {{date}}, {{tasks}}. "
-        "Без неё протокол собирается по встроенной разметке. "
-        "Образец — data/sample/protocol_template.md.",
+        help="Ваша форма документа с местами вида {{date}}, {{decisions}}. "
+        "Без неё берётся форма из настроек (form_file), а без неё — "
+        "встроенная разметка. Образец — examples/форма.md.",
     )
+    if template_file is None and BASE.form_file:
+        st.caption(f"Форма протокола из настроек: `{BASE.form_file}`")
 
     if st.button("Проверить доступ к моделям", **full_width()):
         # Секунда проверки против сорока минут распознавания, которое
@@ -975,9 +977,16 @@ if st.button("Собрать протокол", type="primary"):
     )
     live.finish("Протокол собран")
 
-    template_text = (
-        template_file.getvalue().decode("utf-8-sig") if template_file is not None else None
-    )
+    # Загруженная форма важнее записанной в настройках: её принесли сейчас
+    # и для этого совещания. Нет ни той, ни другой — встроенная разметка.
+    template_text = None
+    if template_file is not None:
+        template_text = template_file.getvalue().decode("utf-8-sig")
+    elif BASE.form_file:
+        try:
+            template_text = Path(BASE.form_file).read_text(encoding="utf-8-sig")
+        except OSError as exc:
+            st.warning(f"Форма протокола не прочитана ({exc}) — собираю по встроенной.")
     # Всё по одному разбору лежит в своей папке. Стенограмма уже сохранена
     # на шаге распознавания — второй раз не пишем.
     stem = "протокол"

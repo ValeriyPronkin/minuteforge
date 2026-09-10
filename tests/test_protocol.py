@@ -268,3 +268,90 @@ def test_a_standing_order_gets_no_date():
     )
 
     assert protocol.tasks[0].due_date == ""
+
+
+# ------------------------------------------- раздел «Решили»
+
+def test_orders_to_one_addressee_become_one_point():
+    """В документе поручения не лежат плоским списком: один адресат — один
+    пункт, несколько поручений — подпунктами, общий срок под ними."""
+    protocol = build_protocol(
+        [
+            Task("Ускорить заключение соглашения", unit="Первая площадка", due_date="20.09.2026"),
+            Task("Обеспечить установку видеонаблюдения", unit="Первая площадка", due_date="20.09.2026"),
+        ],
+        addressees={"Первая площадка": "Рекомендовать руководству первой площадки"},
+    )
+
+    decisions = protocol.fields()["decisions"]
+    assert decisions.startswith("1. Рекомендовать руководству первой площадки:")
+    assert "- ускорить заключение соглашения;" in decisions
+    assert "- обеспечить установку видеонаблюдения." in decisions
+    assert "Срок: 20.09.2026." in decisions
+
+
+def test_a_single_order_needs_no_sublist():
+    protocol = build_protocol(
+        [Task("Вынести вопрос на штаб", unit="Второй участок")],
+        addressees={"Второй участок": "Рекомендовать руководству второго участка"},
+    )
+
+    assert protocol.fields()["decisions"] == (
+        "1. Рекомендовать руководству второго участка: вынести вопрос на штаб."
+    )
+
+
+def test_different_deadlines_are_not_squeezed_into_one_line():
+    """«Срок: 10.09» под пунктом, где половина подпунктов к другому числу, —
+    не сокращение, а подлог."""
+    protocol = build_protocol(
+        [
+            Task("Завершить строительство", unit="Третий цех", due_date="30.11.2026"),
+            Task("Установить видеонаблюдение", unit="Третий цех", due_date="10.09.2026"),
+        ],
+        addressees={"Третий цех": "Третьему цеху"},
+    )
+
+    decisions = protocol.fields()["decisions"]
+    assert "срок — 30.11.2026" in decisions
+    assert "срок — 10.09.2026" in decisions
+    assert "Срок:" not in decisions
+
+
+def test_the_addressee_is_the_unit_even_when_a_person_was_named():
+    """В документе поручают организации, а названный вслух человек в ней
+    работает. Он не пропадает: в таблице поручений графа «Исполнитель»
+    остаётся."""
+    protocol = build_protocol(
+        [Task("Подтвердить сроки", who="Ким С.А.", unit="Первая площадка")],
+        addressees={"Первая площадка": "Первой площадке"},
+    )
+
+    assert protocol.fields()["decisions"].startswith("1. Первой площадке:")
+    assert "Ким С.А." in protocol.tasks_csv()
+
+
+def test_without_a_directory_addressee_the_name_goes_as_it_is():
+    """Падежей инструмент не знает и склонять не берётся."""
+    protocol = build_protocol([Task("Подтвердить сроки", unit="Первая площадка")])
+
+    assert protocol.fields()["decisions"].startswith("1. Первая площадка:")
+
+
+def test_a_collective_addressee_opens_the_point_with_a_capital():
+    protocol = build_protocol([Task("Верифицировать цифры", who="все регионы")])
+
+    assert protocol.fields()["decisions"].startswith("1. Все регионы:")
+
+
+def test_points_follow_the_meeting_not_the_alphabet():
+    """Разбор шёл по кругу, и пункт ищут там же, где он прозвучал."""
+    protocol = build_protocol(
+        [
+            Task("Первое поручение", unit="Ярославский участок", at=100),
+            Task("Второе поручение", unit="Алтайский участок", at=200),
+        ],
+    )
+
+    decisions = protocol.fields()["decisions"]
+    assert decisions.index("Ярославский") < decisions.index("Алтайский")

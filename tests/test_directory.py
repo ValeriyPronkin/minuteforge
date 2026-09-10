@@ -213,3 +213,19 @@ def test_a_missing_directory_does_not_stop_the_work(tmp_path):
     assert not read_directory(tmp_path / "нет-такого.csv")
     assert not read_directory(None)
     assert not read_directory("")
+
+
+def test_the_third_column_says_how_to_address(tmp_path):
+    """«Ставропольский край» → «Правительству Ставропольского края»: по-русски
+    это другой падеж, а падежей инструмент не знает."""
+    file = tmp_path / "справочник.csv"
+    file.write_text(
+        "Направление;Как звучит;Кому адресовать\n"
+        "Первая площадка;первая площадк, северный цех;Руководству первой площадки\n"
+        "Второй участок;второй участ\n",
+        encoding="utf-8",
+    )
+    units = read_directory(file)
+
+    assert units.addressees() == {"Первая площадка": "Руководству первой площадки"}
+    assert units.find("Северный цех отчитался") == "Первая площадка", "созвучия целы"

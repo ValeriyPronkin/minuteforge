@@ -1460,6 +1460,24 @@ def extract_tasks(
                 why="По каждому пункту модель отвечала, поручение это или "
                 "изложение доклада. Снятое — то, что она сочла докладом.",
             )
+    if settings is not None and getattr(settings, "rewrite_tasks", False) and single:
+        report(progress, Step(name="rewrite", title="Дописываю формулировки", share=1.0))
+        if verifier is not None and verifier is not client:
+            # Проверяющую модель выгружаем: дописывает формулировки щедрая,
+            # та же, что выписывала, и держать в памяти обе незачем.
+            unload = getattr(verifier, "unload", None)
+            if callable(unload):
+                unload()
+        before = single
+        single = rewrite(single, client, json_mode=bool(json_mode))
+        if journal is not None:
+            journal.step(
+                "Формулировки по окну", before, single,
+                why="Выписывая, модель отдаёт ядро — «обеспечить связь». "
+                "Предмет и подробности стоят в соседних фразах окна, и здесь "
+                "они дописаны. Пунктов при этом не убывает: отказ оставляет "
+                "прежнюю формулировку.",
+            )
     return single
 
 
@@ -1923,6 +1941,133 @@ def verify(
     if dropped:
         logger.info("Проверка сняла {} из {}", len(dropped), len(tasks))
     return kept
+
+
+REWRITE_SYSTEM = """Ты — секретарь совещания. Тебе дан кусок стенограммы и выписанный
+из него пункт. Запиши этот пункт так, как он должен стоять в протоколе.
+
+Правила:
+— начинай с глагола в неопределённой форме: «обеспечить», «представить», «завершить»;
+— возьми из куска предмет и подробности: что именно, по какому объекту, куда
+  представить, что приложить;
+— не добавляй того, чего в куске нет: ни сроков, ни фамилий, ни цифр, ни названий;
+— не пиши, кому поручено: адресат в протоколе стоит отдельной строкой;
+— одно предложение, без вводных слов, без кавычек, без пояснений.
+
+Ответь строго так, без единого слова вокруг:
+
+{"task": "…"}"""
+
+#: Схема ответа переписывающего. Одно поле: дай мелкой модели свободу — и
+#: она вернёт пункт вместе с рассуждением о том, почему написала именно так.
+REWRITE_SCHEMA = {
+    "type": "object",
+    "properties": {"task": {"type": "string"}},
+    "required": ["task"],
+    "additionalProperties": False,
+}
+
+#: Какая доля значащих слов переписанного пункта должна найтись в окне.
+#: Ниже — модель уже не переписывает, а сочиняет: «завершить работы по
+#: наружным сетям» становится «завершить работы по наружным сетям и ввести
+#: объект в эксплуатацию в декабре», где декабря не было ни в одной фразе.
+FROM_THE_WINDOW = 0.7
+
+#: Сколько знаков позволено пункту. Модель, которой велели писать полнее,
+#: иногда пересказывает окно целиком.
+LONGEST = 400
+
+
+def rewrite(
+    tasks: Sequence[Task],
+    client: LLMClient,
+    *,
+    json_mode: bool = True,
+) -> list[Task]:
+    """Дописывает формулировки по окну, из которого пункт выписан.
+
+    Выписывая, модель отдаёт ядро: «Обеспечить связь». В документе такой
+    пункт бессмыслен — по нему нельзя ни исполнить, ни проверить. Предмет,
+    объект и то, куда представить результат, стоят рядом, в соседних фразах
+    окна, и там же им место в протоколе: «обеспечить устойчивую связь со
+    студией на время заседания».
+
+    Переписывание — то место, где модель начинает сочинять, и потому оно
+    обставлено проверками. Пункт принимается, только если он не короче
+    прежнего и если его слова взяты из окна: выдуманные сроки, фамилии и
+    цифры отсеиваются здесь, а не читателем документа.
+
+    Отказ — не потеря: остаётся прежняя формулировка. Она хуже, но она
+    точно из стенограммы.
+    """
+    if not tasks:
+        return list(tasks)
+
+    done: list[Task] = []
+    changed = 0
+    refused = 0
+    for task in tasks:
+        source = task.context or task.quote
+        if not source:
+            done.append(task)
+            continue
+        question = f"Кусок стенограммы:\n{source}\n\nВыписанный пункт: {task.what}"
+        try:
+            reply = client.complete(
+                REWRITE_SYSTEM, question,
+                json_mode=json_mode,
+                schema=REWRITE_SCHEMA if json_mode else None,
+            )
+        except LLMError as exc:
+            logger.warning("Переписать пункт не удалось, оставляю: {}", exc)
+            done.append(task)
+            continue
+        said = _read_rewrite(reply.text)
+        if not said or not _from_the_window(said, task, source):
+            refused += 1
+            done.append(task)
+            continue
+        done.append(replace(task, what=said))
+        changed += 1
+
+    if changed or refused:
+        logger.info(
+            "Формулировки: дописано {}, оставлено как было {}", changed, refused
+        )
+    return done
+
+
+def _read_rewrite(answer: str) -> str:
+    """Достаёт пункт из ответа. Не разобрали — считаем, что ответа нет."""
+    text = (answer or "").strip()
+    if not text:
+        return ""
+    try:
+        body = json.loads(text[text.find("{") : text.rfind("}") + 1])
+    except ValueError:
+        return ""
+    said = body.get("task") if isinstance(body, dict) else ""
+    return str(said or "").strip().strip('"').rstrip(".")
+
+
+def _from_the_window(said: str, task: Task, source: str) -> bool:
+    """Взят ли переписанный пункт из окна, а не сочинён.
+
+    Проверок три, и каждая ловит своё. Длиннее прежнего — иначе переписывать
+    было незачем. Не длиннее разумного — модель, которой велели писать
+    полнее, пересказывает окно целиком. И главное: слова должны найтись в
+    окне; сравнение идёт по основам, потому что падеж модель меняет
+    законно, а вот декабрь, которого в окне не было, основой не притворится.
+    """
+    if len(said) > LONGEST:
+        return False
+    words = _significant(said)
+    if not words or len(words) <= len(_significant(task.what)):
+        return False
+    # Порог много выше, чем у :func:`grounded`: та сверяет пункт со всей
+    # стенограммой, где найдётся почти любое слово, а здесь — с окном в три
+    # фразы, и всё лишнее в нём сразу видно.
+    return len(words & _significant(source)) >= len(words) * FROM_THE_WINDOW
 
 
 def _said_no(answer: str) -> bool:

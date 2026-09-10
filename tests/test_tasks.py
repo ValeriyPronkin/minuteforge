@@ -1613,3 +1613,92 @@ def test_one_model_does_both_when_no_second_is_set():
 
     assert [t.what for t in found] == ["Подготовить план работ"]
     assert not client.unloaded
+
+
+# ------------------------------------------- формулировки по окну
+
+def _judge(answers):
+    """Клиент, отвечающий по очереди заготовленным."""
+    from minuteforge.llm import Reply
+
+    class Fake:
+        def __init__(self):
+            self.said = list(answers)
+
+        def complete(self, system, user, **kwargs):
+            return Reply(text=self.said.pop(0))
+
+    return Fake()
+
+
+def test_the_wording_is_filled_in_from_the_window():
+    """Выписывая, модель отдаёт ядро — «обеспечить связь». Предмет и
+    подробности стоят в соседних фразах окна, и в документе им место."""
+    from minuteforge.tasks import Task, rewrite
+
+    task = Task(
+        what="Обеспечить связь",
+        quote="Просьба обеспечить.",
+        context="У нас проблемы со связью, третий инцидент подряд. "
+        "Полноценно работать невозможно. Просьба обеспечить устойчивую связь со студией.",
+    )
+    done = rewrite([task], _judge(['{"task": "обеспечить устойчивую связь со студией"}']))
+
+    assert done[0].what == "обеспечить устойчивую связь со студией"
+    assert done[0].quote == task.quote, "цитата остаётся прежней — по ней вычитывают"
+
+
+def test_an_invented_detail_is_refused():
+    """Переписывание — то место, где модель начинает сочинять. Срока,
+    которого в окне не было, в протоколе быть не должно."""
+    from minuteforge.tasks import Task, rewrite
+
+    task = Task(
+        what="Завершить работы",
+        quote="Завершайте быстрее.",
+        context="Вы отстаёте по наружным сетям и по благоустройству. Завершайте быстрее.",
+    )
+    done = rewrite([task], _judge([
+        '{"task": "завершить работы и ввести объект в эксплуатацию до двадцатого декабря"}'
+    ]))
+
+    assert done[0].what == "Завершить работы", "осталась прежняя — она точно из стенограммы"
+
+
+def test_a_shorter_wording_is_not_an_improvement():
+    from minuteforge.tasks import Task, rewrite
+
+    task = Task(
+        what="Обеспечить устойчивую связь со студией",
+        quote="Просьба обеспечить устойчивую связь со студией.",
+        context="Просьба обеспечить устойчивую связь со студией.",
+    )
+    done = rewrite([task], _judge(['{"task": "обеспечить связь"}']))
+
+    assert done[0].what == "Обеспечить устойчивую связь со студией"
+
+
+def test_a_silent_server_does_not_spoil_the_wording():
+    from minuteforge.llm import LLMError
+    from minuteforge.tasks import Task, rewrite
+
+    class Silent:
+        def complete(self, system, user, **kwargs):
+            raise LLMError("сервер не ответил")
+
+    task = Task(what="Обеспечить связь", quote="Просьба обеспечить.",
+                context="Просьба обеспечить связь со студией.")
+    assert rewrite([task], Silent())[0].what == "Обеспечить связь"
+
+
+def test_rewriting_never_loses_a_point():
+    """Отказ — не потеря: пунктов после стадии ровно столько же."""
+    from minuteforge.tasks import Task, rewrite
+
+    tasks = [
+        Task(what="Обеспечить связь", quote="a", context="Просьба обеспечить связь со студией."),
+        Task(what="Подтвердить сроки", quote="b", context="Просьба подтвердить сроки ввода объекта."),
+    ]
+    done = rewrite(tasks, _judge(['{"task": "чепуха"}', "не json вовсе"]))
+
+    assert [t.what for t in done] == ["Обеспечить связь", "Подтвердить сроки"]

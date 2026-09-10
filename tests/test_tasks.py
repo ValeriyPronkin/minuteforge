@@ -1702,3 +1702,42 @@ def test_rewriting_never_loses_a_point():
     done = rewrite(tasks, _judge(['{"task": "чепуха"}', "не json вовсе"]))
 
     assert [t.what for t in done] == ["Обеспечить связь", "Подтвердить сроки"]
+
+
+def test_the_late_stages_report_their_progress():
+    """Полоса стояла полной, пока проверочная модель работала: выписка
+    занимала её целиком. Минуты молчания выглядят зависанием."""
+    from minuteforge.llm import Reply
+    from minuteforge.tasks import Task, verify
+
+    class Judge:
+        def complete(self, system, user, **kwargs):
+            return Reply(text='{"order": true}')
+
+    seen = []
+    tasks = [Task(what=f"Поручение {i}", quote="Просьба подтвердить.",
+                  context="Просьба подтвердить сроки ввода.") for i in range(4)]
+    verify(tasks, Judge(), progress=seen.append, share=(0.5, 1.0))
+
+    assert [step.title for step in seen][0] == "Проверяю поручения: 1 из 4"
+    assert seen[0].share == 0.5, "стадия начинается со своей границы"
+    assert seen[-1].share < 1.0, "и не доходит до конца раньше времени"
+    assert [step.share for step in seen] == sorted(step.share for step in seen)
+
+
+def test_the_bar_is_split_between_the_stages_that_will_run():
+    """Выключенная стадия куска полосы не занимает — иначе она встала бы на
+    двух третях и там осталась."""
+    from minuteforge.tasks import _stage_shares
+
+    class Both:
+        verify_tasks = rewrite_tasks = True
+
+    class Neither:
+        verify_tasks = rewrite_tasks = False
+
+    outline, checking, wording = _stage_shares(Both())
+    assert (round(outline, 2), round(checking[1], 2), wording[1]) == (0.33, 0.67, 1.0)
+
+    outline, checking, wording = _stage_shares(Neither())
+    assert outline == 1.0 and checking == (1.0, 1.0)

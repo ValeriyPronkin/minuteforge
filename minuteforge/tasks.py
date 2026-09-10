@@ -1272,11 +1272,18 @@ def extract_tasks(
     # поручили, отбор по фразам не даст ни одного, и настройки всё равно
     # нужны дальше.
     settings = getattr(client, "settings", None)
+    # Полоса делится между стадиями, которые ходят к модели: выписка,
+    # проверка, формулировки. Раньше выписка занимала её целиком, и на двух
+    # поздних стадиях полоса стояла полной по несколько минут — выглядело
+    # это зависанием, а не работой.
+    outline, checking, wording = _stage_shares(settings)
 
     for position, chunk in enumerate(chunks, 1):
         title = f"Фрагмент {chunk.index} из {chunk.total}"
         json_mode = getattr(client, "settings", None) and client.settings.llm_json_mode
-        report(progress, Step(name="chunk", title=title, share=(position - 1) / total))
+        report(progress, Step(
+            name="chunk", title=title, share=outline * (position - 1) / total
+        ))
 
         started = time.perf_counter()
         system, user = build_prompt(
@@ -1357,7 +1364,7 @@ def extract_tasks(
             title=f"{title} — поручений {len(found)}",
             done=True,
             elapsed_s=round(time.perf_counter() - started, 1),
-            share=position / total,
+            share=outline * position / total,
         ))
 
     whole = dedupe(collected)
@@ -1440,7 +1447,6 @@ def extract_tasks(
                 "окнах. Решает модель, сливает код.",
             )
     if settings is not None and getattr(settings, "verify_tasks", False) and single:
-        report(progress, Step(name="verify", title="Проверяю поручения", share=1.0))
         checker = verifier or client
         if checker is not client:
             # Первую модель выгружаем: на карте, где две не помещаются
@@ -1453,6 +1459,7 @@ def extract_tasks(
         single = verify(
             single, checker, json_mode=bool(json_mode),
             extra=getattr(settings, "verify_prompt_extra", "") or "",
+            progress=progress, share=checking,
         )
         if journal is not None:
             journal.step(
@@ -1461,7 +1468,6 @@ def extract_tasks(
                 "изложение доклада. Снятое — то, что она сочла докладом.",
             )
     if settings is not None and getattr(settings, "rewrite_tasks", False) and single:
-        report(progress, Step(name="rewrite", title="Дописываю формулировки", share=1.0))
         if verifier is not None and verifier is not client:
             # Проверяющую модель выгружаем: дописывает формулировки щедрая,
             # та же, что выписывала, и держать в памяти обе незачем.
@@ -1469,7 +1475,10 @@ def extract_tasks(
             if callable(unload):
                 unload()
         before = single
-        single = rewrite(single, client, json_mode=bool(json_mode))
+        single = rewrite(
+            single, client, json_mode=bool(json_mode),
+            progress=progress, share=wording,
+        )
         if journal is not None:
             journal.step(
                 "Формулировки по окну", before, single,
@@ -1875,6 +1884,8 @@ def verify(
     *,
     json_mode: bool = True,
     extra: str = "",
+    progress: Progress | None = None,
+    share: tuple[float, float] = (0.0, 1.0),
 ) -> list[Task]:
     """Спрашивает модель по каждому пункту: поручение это или доклад.
 
@@ -1902,7 +1913,15 @@ def verify(
     system = with_extra(VERIFY_SYSTEM, extra)
     kept: list[Task] = []
     dropped: list[Task] = []
-    for task in tasks:
+    for position, task in enumerate(tasks, 1):
+        # По каждому пункту, а не один раз на всю стадию: запрос на пункт
+        # идёт секунды, пунктов полсотни, и молчащая полоса всё это время
+        # выглядит зависанием.
+        report(progress, Step(
+            name="verify",
+            title=f"Проверяю поручения: {position} из {len(tasks)}",
+            share=_between(share, position - 1, len(tasks)),
+        ))
         source = task.context or task.quote
         if not source:
             kept.append(task)
@@ -1983,6 +2002,8 @@ def rewrite(
     client: LLMClient,
     *,
     json_mode: bool = True,
+    progress: Progress | None = None,
+    share: tuple[float, float] = (0.0, 1.0),
 ) -> list[Task]:
     """Дописывает формулировки по окну, из которого пункт выписан.
 
@@ -2006,7 +2027,12 @@ def rewrite(
     done: list[Task] = []
     changed = 0
     refused = 0
-    for task in tasks:
+    for position, task in enumerate(tasks, 1):
+        report(progress, Step(
+            name="rewrite",
+            title=f"Дописываю формулировки: {position} из {len(tasks)}",
+            share=_between(share, position - 1, len(tasks)),
+        ))
         source = task.context or task.quote
         if not source:
             done.append(task)
@@ -2035,6 +2061,29 @@ def rewrite(
             "Формулировки: дописано {}, оставлено как было {}", changed, refused
         )
     return done
+
+
+def _stage_shares(settings) -> tuple[float, tuple[float, float], tuple[float, float]]:
+    """Как поделить полосу между выпиской, проверкой и формулировками.
+
+    Поровну между теми стадиями, которые будут работать: точнее не выйдет —
+    длительность зависит от того, сколько поручений найдётся, а это станет
+    известно только по ходу. Зато полоса не стоит и не прыгает.
+    """
+    later = [
+        bool(getattr(settings, "verify_tasks", False)),
+        bool(getattr(settings, "rewrite_tasks", False)),
+    ]
+    step = 1 / (1 + sum(later))
+    outline = step
+    checking = (outline, outline + (step if later[0] else 0))
+    return outline, checking, (checking[1], 1.0)
+
+
+def _between(share: tuple[float, float], done: int, total: int) -> float:
+    """Доля внутри отведённого стадии куска полосы."""
+    start, end = share
+    return start + (end - start) * (done / total if total else 1)
 
 
 def _read_rewrite(answer: str) -> str:

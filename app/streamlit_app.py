@@ -57,6 +57,7 @@ from minuteforge.pipeline import (  # noqa: E402
     _free_name,
     _text_with_head,
     recorded_when,
+    models_tag,
     run_dir,
     run_tag,
     save,
@@ -766,10 +767,16 @@ if source_path is not None or uploaded is not None:
             st.session_state["stem"] = source.stem
             # Своя папка на каждый разбор: иначе второй прогон той же записи
             # молча затирает первый, и сравнивать настройки не с чем.
-            tag = run_tag(st.session_state.get("meeting_date", ""))
+            # У стенограммы своя модель — распознавания, и в её имени стоит
+            # она: расшифровки large-v3 и medium различаются фамилиями и
+            # цифрами, а по имени файла этого потом не узнать.
+            meeting = st.session_state.get("meeting_date", "")
+            heard_by = models_tag(transcript.model or settings.asr_model) if BASE.name_with_models else ""
+            # Метка считается один раз: посчитанная второй, она разошлась бы
+            # с именем папки на минуту.
+            tag = run_tag(meeting, models=heard_by)
             folder = run_dir(out_dir, source.stem, tag=tag)
             st.session_state["run_dir"] = folder
-            st.session_state["run_tag"] = tag
             saved = save_transcript(transcript, folder, stem=f"{tag}_стенограмма")
             st.session_state["saved_transcript"] = saved
         except MissingToken as exc:
@@ -1033,8 +1040,13 @@ if st.button("Собрать протокол", type="primary"):
     # пересылают, кладут рядом с чужим, — и «протокол.md» от трёх разных
     # заседаний в одной папке загрузок неразличимы.
     meeting = st.session_state.get("meeting_date", "")
-    tag = st.session_state.get("run_tag") or run_tag(meeting)
-    st.session_state["run_tag"] = tag
+    # У протокола свои модели — та, что выписывала, и та, что проверяла.
+    # Сейчас прогоны различаются именно ими.
+    made_by = (
+        models_tag(settings.llm_model, settings.llm_verify_model)
+        if BASE.name_with_models else ""
+    )
+    tag = run_tag(meeting, models=made_by)
     stem = f"{tag}_протокол"
     folder = st.session_state.get("run_dir") or run_dir(
         out_dir, st.session_state.get("stem", "совещание"), tag=tag

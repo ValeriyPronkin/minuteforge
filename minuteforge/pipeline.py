@@ -473,8 +473,25 @@ def warm_up(client, progress=None) -> None:
     report(progress, Step(name="warmup", title="Модель загружена", done=True, share=0.0))
 
 
-def run_tag(meeting: str = "", stamp: datetime | None = None) -> str:
-    """Метка прогона: `2026-09-03_1720` — день совещания и час расчёта.
+def models_tag(*names: str) -> str:
+    """Короткие имена моделей для имени прогона: `mistral+qwen14-protocol`.
+
+    Тег после двоеточия отбрасывается: «mistral» и «mistral:latest» — одна и
+    та же модель, а в имени файла разница только мешает. Повторы снимаются:
+    когда проверяет та же модель, что выписывает, писать её дважды незачем.
+    """
+    short = [name.split(":")[0].strip() for name in names if name and name.strip()]
+    return "+".join(dict.fromkeys(short))
+
+
+def run_tag(
+    meeting: str = "",
+    stamp: datetime | None = None,
+    models: str = "",
+) -> str:
+    """Метка прогона: `2026-09-03_1720_mistral+qwen14-protocol`.
+
+    День совещания, час расчёта и модели, которыми считали.
 
     Дата именно совещания, а не расчёта. За один день считают несколько
     записей разных дат, и папки, названные днём обработки, выходят
@@ -482,12 +499,17 @@ def run_tag(meeting: str = "", stamp: datetime | None = None) -> str:
     внутрь. Час расчёта остаётся вторым: одну и ту же запись пересчитывают
     по нескольку раз с разными настройками, и прогоны надо различать.
 
+    Модели — потому что прогоны сейчас и различаются ими: ту же запись гоняют
+    с разной проверочной моделью, и по числам сравнивают, какая лучше. Когда
+    набор устоится, они станут шумом — тогда `name_with_models: false`.
+
     Дату совещания не разобрали — берётся день расчёта: пустое место в имени
     хуже неточного.
     """
     stamp = stamp or datetime.now()
     day = dates.parse_meeting_date(meeting) if meeting else None
-    return f"{day:%Y-%m-%d}_{stamp:%H%M}" if day else f"{stamp:%Y-%m-%d_%H%M}"
+    when = f"{day:%Y-%m-%d}_{stamp:%H%M}" if day else f"{stamp:%Y-%m-%d_%H%M}"
+    return f"{when}_{models}" if models else when
 
 
 def run_dir(

@@ -800,3 +800,35 @@ def test_two_runs_of_the_same_meeting_differ_by_the_hour():
     second = run_tag("03.09.2026", datetime(2026, 9, 10, 18, 5))
 
     assert first != second and first.startswith("2026-09-03")
+
+
+def test_the_run_name_says_which_models_made_it():
+    """Прогоны сейчас различаются моделями: ту же запись гоняют с разной
+    проверочной и сравнивают числа."""
+    from datetime import datetime
+
+    from minuteforge.pipeline import models_tag, run_tag
+
+    when = datetime(2026, 9, 10, 17, 20)
+    both = run_tag("03.09.2026", when, models_tag("mistral", "qwen14-protocol"))
+
+    assert both == "2026-09-03_1720_mistral+qwen14-protocol"
+
+
+def test_one_model_is_not_written_twice():
+    """Проверяет та же, что выписывает, — писать её дважды незачем.
+    И тег после двоеточия не пишется: «mistral» и «mistral:latest» одно."""
+    from minuteforge.pipeline import models_tag
+
+    assert models_tag("mistral:latest", "mistral") == "mistral"
+    assert models_tag("mistral", "") == "mistral"
+    assert models_tag("", "") == ""
+
+
+def test_without_models_the_name_is_as_before():
+    """Когда набор устоится, модели в имени станут шумом."""
+    from datetime import datetime
+
+    from minuteforge.pipeline import run_tag
+
+    assert run_tag("03.09.2026", datetime(2026, 9, 10, 17, 20)) == "2026-09-03_1720"

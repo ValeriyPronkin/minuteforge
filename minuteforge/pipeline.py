@@ -473,8 +473,32 @@ def warm_up(client, progress=None) -> None:
     report(progress, Step(name="warmup", title="Модель загружена", done=True, share=0.0))
 
 
-def run_dir(out_dir: str | Path, stem: str, *, stamp: datetime | None = None) -> Path:
-    """Своя папка на каждый разбор: `2026-08-27_1650_совещание`.
+def run_tag(meeting: str = "", stamp: datetime | None = None) -> str:
+    """Метка прогона: `2026-09-03_1720` — день совещания и час расчёта.
+
+    Дата именно совещания, а не расчёта. За один день считают несколько
+    записей разных дат, и папки, названные днём обработки, выходят
+    одинаковыми: разобрать, где какое заседание, можно только заглянув
+    внутрь. Час расчёта остаётся вторым: одну и ту же запись пересчитывают
+    по нескольку раз с разными настройками, и прогоны надо различать.
+
+    Дату совещания не разобрали — берётся день расчёта: пустое место в имени
+    хуже неточного.
+    """
+    stamp = stamp or datetime.now()
+    day = dates.parse_meeting_date(meeting) if meeting else None
+    return f"{day:%Y-%m-%d}_{stamp:%H%M}" if day else f"{stamp:%Y-%m-%d_%H%M}"
+
+
+def run_dir(
+    out_dir: str | Path,
+    stem: str,
+    *,
+    stamp: datetime | None = None,
+    meeting: str = "",
+    tag: str = "",
+) -> Path:
+    """Своя папка на каждый разбор: `2026-09-03_1720_совещание`.
 
     Иначе второй прогон той же записи молча затирает первый, и сравнить
     настройки не с чем — а сравнивать приходится постоянно, потому что
@@ -484,8 +508,9 @@ def run_dir(out_dir: str | Path, stem: str, *, stamp: datetime | None = None) ->
     подразделение, и в ней лежит всё по одному совещанию сразу. Дата первой
     в имени — так проводник сортирует прогоны по порядку.
     """
-    stamp = stamp or datetime.now()
-    return Path(out_dir).expanduser().resolve() / f"{stamp:%Y-%m-%d_%H%M}_{stem}"
+    # Готовая метка важнее: имена файлов внутри папки берутся из неё же, и
+    # посчитанная второй раз она разошлась бы с именем папки на минуту.
+    return Path(out_dir).expanduser().resolve() / f"{tag or run_tag(meeting, stamp)}_{stem}"
 
 
 def _free_name(path: Path) -> Path:

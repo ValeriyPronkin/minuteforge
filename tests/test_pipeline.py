@@ -759,3 +759,44 @@ def test_the_same_path_works_on_a_meeting_of_another_kind(tmp_path):
     assert protocol.tasks[0].due_date == "11.09.2026"
     assert "| Участок |" in protocol.as_markdown()
     assert "| Литейный участок |" in protocol.as_markdown()
+
+
+# ------------------------------------------- имена прогонов
+
+def test_the_run_is_named_by_the_meeting_not_by_the_day_it_was_processed():
+    """За один день считают несколько записей разных дат. Папки, названные
+    днём обработки, выходят одинаковыми, и разобрать их можно только
+    заглянув внутрь."""
+    from datetime import datetime
+
+    from minuteforge.pipeline import run_dir, run_tag
+
+    processed = datetime(2026, 9, 10, 17, 20)
+
+    assert run_tag("03.09.2026, 11:00", processed) == "2026-09-03_1720"
+    assert run_dir("/выход", "штаб", stamp=processed, meeting="03.09.2026").name == (
+        "2026-09-03_1720_штаб"
+    )
+
+
+def test_without_a_meeting_date_the_day_of_the_run_is_used():
+    """Пустое место в имени хуже неточного."""
+    from datetime import datetime
+
+    from minuteforge.pipeline import run_tag
+
+    assert run_tag("", datetime(2026, 9, 10, 17, 20)) == "2026-09-10_1720"
+    assert run_tag("непонятно что", datetime(2026, 9, 10, 17, 20)) == "2026-09-10_1720"
+
+
+def test_two_runs_of_the_same_meeting_differ_by_the_hour():
+    """Одну запись пересчитывают с разными настройками, и прогоны надо
+    различать — иначе сравнивать нечего."""
+    from datetime import datetime
+
+    from minuteforge.pipeline import run_tag
+
+    first = run_tag("03.09.2026", datetime(2026, 9, 10, 17, 20))
+    second = run_tag("03.09.2026", datetime(2026, 9, 10, 18, 5))
+
+    assert first != second and first.startswith("2026-09-03")

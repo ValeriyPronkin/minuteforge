@@ -58,6 +58,7 @@ from minuteforge.pipeline import (  # noqa: E402
     _text_with_head,
     recorded_when,
     run_dir,
+    run_tag,
     save,
     save_transcript,
     transcribe_meeting,
@@ -765,9 +766,11 @@ if source_path is not None or uploaded is not None:
             st.session_state["stem"] = source.stem
             # Своя папка на каждый разбор: иначе второй прогон той же записи
             # молча затирает первый, и сравнивать настройки не с чем.
-            folder = run_dir(out_dir, source.stem)
+            tag = run_tag(st.session_state.get("meeting_date", ""))
+            folder = run_dir(out_dir, source.stem, tag=tag)
             st.session_state["run_dir"] = folder
-            saved = save_transcript(transcript, folder, stem="стенограмма")
+            st.session_state["run_tag"] = tag
+            saved = save_transcript(transcript, folder, stem=f"{tag}_стенограмма")
             st.session_state["saved_transcript"] = saved
         except MissingToken as exc:
             st.error(str(exc))
@@ -1026,9 +1029,15 @@ if st.button("Собрать протокол", type="primary"):
             st.warning(f"Форма протокола не прочитана ({exc}) — собираю по встроенной.")
     # Всё по одному разбору лежит в своей папке. Стенограмма уже сохранена
     # на шаге распознавания — второй раз не пишем.
-    stem = "протокол"
+    # Имя файла несёт дату совещания и час расчёта: из папки его вынимают —
+    # пересылают, кладут рядом с чужим, — и «протокол.md» от трёх разных
+    # заседаний в одной папке загрузок неразличимы.
+    meeting = st.session_state.get("meeting_date", "")
+    tag = st.session_state.get("run_tag") or run_tag(meeting)
+    st.session_state["run_tag"] = tag
+    stem = f"{tag}_протокол"
     folder = st.session_state.get("run_dir") or run_dir(
-        out_dir, st.session_state.get("stem", "совещание")
+        out_dir, st.session_state.get("stem", "совещание"), tag=tag
     )
     st.session_state["run_dir"] = folder
     if template_text is None:

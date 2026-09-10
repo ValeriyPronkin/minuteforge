@@ -844,7 +844,9 @@ with st.expander("Скачать себе"):
 # ---------------------------------------------------------------- шаг 2
 st.subheader("Шаг 2. Кто есть кто")
 st.caption(
-    "Модель различает голоса, но не знает имён. Метку без имени оставьте "
+    "Имя ставится само там, где ведущий назвал человека и передал ему слово: "
+    "список участников говорит, как оно пишется, а запись — кому оно "
+    "принадлежит. Одного списка для этого мало. Метку без имени оставьте "
     "пустой — она попадёт в протокол как есть, и это лучше, чем чужая "
     "фамилия под чужими словами."
 )
@@ -871,6 +873,11 @@ options = ["", *[person.full for person in people], OTHER]
 ordered = [s for s in transcript.speakers_by_time() if s != UNKNOWN]
 spoken = transcript.speaking_time()
 total_spoken = sum(spoken.values()) or 1.0
+
+#: Какая доля времени речи должна быть опознана, чтобы шаг считался
+#: сделанным и не разворачивался. Не все метки: опознать пятерых,
+#: говоривших два часа, важнее, чем два десятка обрывков по три секунды.
+ENOUGH_NAMED = 0.7
 
 MAIN = 8
 main_labels, rest_labels = ordered[:MAIN], ordered[MAIN:]
@@ -914,13 +921,43 @@ def name_field(label: str) -> None:
         names[label] = choice.split(",")[0].strip()
 
 
-columns = st.columns(min(3, max(1, len(main_labels))))
-for index, label in enumerate(main_labels):
-    with columns[index % len(columns)]:
-        name_field(label)
+# Насколько шаг уже сделан за человека. Считается временем речи, а не
+# числом меток: опознать пятерых, говоривших два часа, важнее, чем два
+# десятка обрывков по три секунды.
+# Догадка считается сделанной, только если такой человек есть в списке
+# выбора: иначе поле осталось пустым, и человеку всё равно его заполнять.
+known = [
+    label for label in ordered
+    if (guess := guesses.get(label)) is not None and guess.full in options
+]
+covered = sum(spoken.get(label, 0.0) for label in known) / total_spoken
 
-if rest_labels:
-    with st.expander(f"Остальные голоса ({len(rest_labels)})"):
+if not ordered:
+    settled = "голосов в записи не нашлось"
+elif known:
+    settled = (
+        f"опознано {len(known)} из {len(ordered)} голосов — "
+        f"{covered:.0%} времени речи"
+    )
+elif roster:
+    settled = (
+        f"список из {len(roster)} человек загружен, но в записи никого "
+        "не представили по имени — сопоставьте руками"
+    )
+else:
+    settled = f"голосов {len(ordered)}, имён нет — сопоставьте руками"
+
+# Раскрыт, только когда есть что доделывать. Три десятка полей, из которых
+# все заполнены верно, — это стена, которую человек листает зря.
+with st.expander(f"Голоса: {settled}", expanded=covered < ENOUGH_NAMED):
+    columns = st.columns(min(3, max(1, len(main_labels))))
+    for index, label in enumerate(main_labels):
+        with columns[index % len(columns)]:
+            name_field(label)
+
+    if rest_labels:
+        st.divider()
+        st.caption(f"Остальные голоса ({len(rest_labels)})")
         tail = st.columns(3)
         for index, label in enumerate(rest_labels):
             with tail[index % 3]:

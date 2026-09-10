@@ -355,3 +355,41 @@ def test_points_follow_the_meeting_not_the_alphabet():
 
     decisions = protocol.fields()["decisions"]
     assert decisions.index("Ярославский") < decisions.index("Алтайский")
+
+
+def test_the_wording_of_an_order_is_set_by_the_organisation():
+    """«Рекомендовать», «Поручить», «Предложить» — оборот один на всю
+    организацию, поэтому он в настройках, а не в справочнике."""
+    tasks = [Task("Подтвердить сроки", unit="Первая площадка")]
+    addressees = {"Первая площадка": "Руководству первой площадки"}
+
+    asked = build_protocol(tasks, addressees=addressees,
+                           decision_formula="Рекомендовать {кому}")
+    plain = build_protocol(tasks, addressees=addressees)
+
+    assert asked.fields()["decisions"].startswith("1. Рекомендовать Руководству первой площадки:")
+    # Адресат идёт как записан в справочнике: заглавные внутри — текст
+    # пользователя, и трогать его нельзя. В эталоне там «Правительству».
+    assert plain.fields()["decisions"].startswith("1. Руководству первой площадки:")
+
+
+def test_a_wording_without_a_place_for_the_addressee_goes_in_front():
+    """Человек напишет в настройках просто «Рекомендовать» — и будет прав."""
+    protocol = build_protocol(
+        [Task("Подтвердить сроки", unit="Первая площадка")],
+        addressees={"Первая площадка": "Руководству первой площадки"},
+        decision_formula="Рекомендовать",
+    )
+
+    assert protocol.fields()["decisions"].startswith("1. Рекомендовать Руководству первой площадки:")
+
+
+def test_the_wording_is_not_glued_to_a_name_said_aloud():
+    """«Рекомендовать все регионы» — не по-русски. Оборот идёт только к
+    адресатам из справочника: там дательный падеж выверен рукой."""
+    protocol = build_protocol(
+        [Task("Верифицировать цифры", who="все регионы")],
+        decision_formula="Рекомендовать {кому}",
+    )
+
+    assert protocol.fields()["decisions"].startswith("1. Все регионы:")

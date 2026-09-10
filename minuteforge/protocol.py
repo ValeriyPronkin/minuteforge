@@ -53,6 +53,9 @@ class Protocol:
     #: третьей его колонки. Нет записи — в документ идёт название как есть:
     #: падежей инструмент не знает и склонять не берётся.
     addressees: dict[str, str] = field(default_factory=dict)
+    #: Оборот, которым поручают: «Рекомендовать {кому}». Пусто — в документ
+    #: идёт один адресат.
+    decision_formula: str = ""
     #: Ответы модели как есть. В документ не идут, нужны для разбора: когда
     #: поручений не нашлось, только по ним и видно, в чём дело.
     answers: list[str] = field(default_factory=list)
@@ -85,6 +88,10 @@ class Protocol:
         и человек, слушавший его, ищет пункт там же, где он прозвучал.
         """
         return group_decisions(self.actionable, self.addressees)
+
+    @property
+    def decisions_text(self) -> str:
+        return "\n".join(_decision_lines(self.decisions, self.decision_formula))
 
     @property
     def needs_clarification(self) -> list[Task]:
@@ -181,7 +188,7 @@ class Protocol:
             "duration": f"{self.transcript.duration_min} мин" if self.transcript else "",
             "model": self.transcript.model if self.transcript else "",
             "tasks": "\n".join(_task_lines(self.actionable)),
-            "decisions": "\n".join(_decision_lines(self.decisions)),
+            "decisions": self.decisions_text,
             "unclear": "\n".join(f"- {t.what}" for t in self.needs_clarification),
             "tasks_table": "\n".join(_task_table(self.actionable, self.unit_label)),
             "tasks_count": str(len(self.tasks)),
@@ -275,6 +282,7 @@ def build_protocol(
     answers: Sequence[str] | None = None,
     unit_label: str = DEFAULT_LABEL,
     addressees: dict[str, str] | None = None,
+    decision_formula: str = "",
 ) -> Protocol:
     """Собирает протокол.
 
@@ -326,6 +334,7 @@ def build_protocol(
         answers=list(answers or []),
         unit_label=unit_label,
         addressees=dict(addressees or {}),
+        decision_formula=decision_formula,
     )
 
 
@@ -345,6 +354,10 @@ class Decision:
 
     addressee: str
     tasks: list[Task] = field(default_factory=list)
+    #: Взят ли адресат из справочника. Оборот приставляется только к таким:
+    #: там дательный падеж выверен рукой, а к исполнителю, названному вслух,
+    #: «Рекомендовать» приставить нельзя — «Рекомендовать все регионы».
+    from_directory: bool = False
 
     @property
     def due(self) -> str:
@@ -373,23 +386,29 @@ def group_decisions(
     addressees = addressees or {}
     order: list[str] = []
     groups: dict[str, list[Task]] = {}
+    known: set[str] = set()
     for task in tasks:
         who = addressees.get(task.unit, task.unit) if task.unit else task.who
         if not who:
             continue
+        if task.unit and task.unit in addressees:
+            known.add(who)
         if who not in groups:
             groups[who] = []
             order.append(who)
         groups[who].append(task)
-    return [Decision(addressee=who, tasks=groups[who]) for who in order]
+    return [
+        Decision(addressee=who, tasks=groups[who], from_directory=who in known)
+        for who in order
+    ]
 
 
-def _decision_lines(decisions: Sequence[Decision]) -> list[str]:
+def _decision_lines(decisions: Sequence[Decision], formula: str = "") -> list[str]:
     """Раздел «Решили» так, как он выглядит в документе."""
     lines: list[str] = []
     for number, point in enumerate(decisions, 1):
         common = point.due
-        addressee = _upper_first(point.addressee)
+        addressee = _upper_first(_addressed(point, formula))
         if len(point.tasks) == 1 and not common:
             # Одно поручение — в строку за двоеточием: заводить подпункт «а»
             # при единственном пункте документу незачем.
@@ -413,6 +432,20 @@ def _said(task: Task) -> str:
     """Поручение так, как оно читается подпунктом: со строчной буквы."""
     text = (task.what or "").strip().rstrip(".")
     return text[:1].lower() + text[1:] if text else text
+
+
+def _addressed(point: Decision, formula: str) -> str:
+    """Адресат с оборотом, которым поручают у вас.
+
+    Оборот идёт только к адресатам из справочника. Исполнитель, названный
+    вслух, приезжает в том падеже, в каком прозвучал, — «все регионы», «Ким
+    С.А.», — и «Рекомендовать все регионы» вышло бы не по-русски.
+    """
+    if not formula or not point.from_directory:
+        return point.addressee
+    if "{кому}" in formula:
+        return formula.replace("{кому}", point.addressee)
+    return f"{formula} {point.addressee}"
 
 
 def _upper_first(text: str) -> str:

@@ -374,6 +374,7 @@ def protocol_from_transcript(
         answers=answers,
         unit_label=units.label,
         addressees=units.addressees(),
+        decision_formula=settings.decision_formula,
     )
     protocol.journal = record
     return protocol

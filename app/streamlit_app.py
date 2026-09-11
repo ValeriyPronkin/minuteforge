@@ -39,6 +39,7 @@ from minuteforge.config import (  # noqa: E402
 )  # noqa: E402
 from minuteforge.dates import date_from_name  # noqa: E402
 from minuteforge.directory import read_directory  # noqa: E402
+from minuteforge.transcribe import read_hints  # noqa: E402
 from minuteforge.journal import setup_file_log  # noqa: E402
 from minuteforge.llm import LLMClient, is_embedder, same_model  # noqa: E402
 from minuteforge.people import (  # noqa: E402
@@ -372,6 +373,29 @@ with st.sidebar:
             "останется пустой, и поручения без названного исполнителя уйдут "
             "в раздел «Требуют уточнения». Файл указывается в config.yaml "
             "полем directory_file."
+        )
+
+    # Подсказки распознаванию — по той же причине здесь, а не в середине
+    # расчёта: узнать, что файл не подхватился, надо до сорока минут
+    # распознавания, а не после.
+    if BASE.asr_hints_file:
+        hinted = read_hints(BASE.asr_hints_file)
+        if hinted:
+            st.caption(
+                f"Подсказки распознаванию: {len(hinted.split(','))} слов — "
+                f"`{BASE.asr_hints_file}`"
+            )
+        else:
+            st.warning(
+                f"Подсказки не прочитаны: `{BASE.asr_hints_file}` не найден "
+                "или пуст. Распознавание пойдёт без них — фамилии и термины "
+                "будут коверкаться чаще."
+            )
+    else:
+        st.caption(
+            "Подсказки распознаванию не заданы: фамилии участников и "
+            "отраслевые слова Whisper будет разбирать на слух. Файл "
+            "указывается в config.yaml полем asr_hints_file."
         )
 
     st.header("Модель для поручений")

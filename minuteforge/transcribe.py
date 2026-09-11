@@ -545,6 +545,10 @@ def read_hints(path: "str | Path | None") -> str:
     почему половина фамилий по-прежнему перевирается.
     """
     if not path:
+        logger.info(
+            "Подсказки распознаванию не заданы (asr_hints_file) — "
+            "фамилии и термины разбираются на слух."
+        )
         return ""
     try:
         lines = Path(path).read_text(encoding="utf-8-sig").splitlines()

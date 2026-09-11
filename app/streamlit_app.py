@@ -382,7 +382,8 @@ with st.sidebar:
         hinted = read_hints(BASE.asr_hints_file)
         if hinted:
             st.caption(
-                f"Подсказки распознаванию: {len(hinted.split(','))} слов — "
+                f"Подсказки распознаванию: {len(hinted.split())} слов "
+                f"{'фразой' if hinted.count('.') > 1 or ',' not in hinted else 'списком'} — "
                 f"`{BASE.asr_hints_file}`"
             )
         else:
@@ -833,7 +834,7 @@ if transcript.hints:
     # Подсказки меняют саму расшифровку, а значит и всё, что из неё
     # выписано. Молча это худший случай: два прогона расходятся, а отчего —
     # непонятно.
-    summary += f", подсказок: **{len(transcript.hints.split(','))}**"
+    summary += f", подсказка: **{len(transcript.hints.split())} слов**"
 st.write(summary)
 for note in transcript.notes:
     st.warning(f"Не хватило видеопамяти: {note}. Качество расшифровки будет ниже.")

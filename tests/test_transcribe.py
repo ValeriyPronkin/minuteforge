@@ -528,3 +528,44 @@ def test_the_transcript_remembers_it_was_hinted(tmp_path):
     from minuteforge.cli import load_transcript
 
     assert load_transcript(where["json"]).hints == "регоператор, ТКО."
+
+
+def test_a_hint_that_starts_with_a_sentence_is_taken_as_speech(tmp_path):
+    """Подсказка у Whisper — предыдущий текст, а не перечень. Файл, начатый
+    предложением, берётся как есть: резать его по запятым значило бы отдать
+    модели обрубок «Заседание Инцидента №58 по обращению с ТКО»."""
+    from minuteforge.transcribe import read_hints
+
+    words = tmp_path / "подсказки.txt"
+    words.write_text(
+        "Заседание штаба по обращению с отходами. Докладывают Ковач и Семенов.\n",
+        encoding="utf-8",
+    )
+
+    assert read_hints(words) == (
+        "Заседание штаба по обращению с отходами. Докладывают Ковач и Семенов."
+    )
+
+
+def test_a_list_is_still_a_list(tmp_path):
+    """Точка в середине слова фразой файл не делает: «ВЭБ.РФ» — слово списка."""
+    from minuteforge.transcribe import read_hints
+
+    words = tmp_path / "подсказки.txt"
+    words.write_text("регоператор\nВЭБ.РФ\n", encoding="utf-8")
+
+    assert read_hints(words) == "регоператор, ВЭБ.РФ."
+
+
+def test_a_long_hint_is_cut_by_whole_sentences(tmp_path):
+    """Оборванная на полуслове подсказка хуже никакой: модель продолжит
+    незаконченную мысль вместо того, чтобы слушать запись."""
+    from minuteforge.transcribe import read_hints
+
+    words = tmp_path / "подсказки.txt"
+    words.write_text(" ".join(f"Предложение номер {n} про отходы." for n in range(200)), encoding="utf-8")
+
+    hint = read_hints(words)
+    assert hint.endswith(".")
+    assert "Предложение номер 0" in hint
+    assert len(hint) / 3 <= 201

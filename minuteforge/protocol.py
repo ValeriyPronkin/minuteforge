@@ -142,7 +142,7 @@ class Protocol:
             # цифрами. Тот, кто будет с документом спорить, должен знать, по
             # чему он составлен.
             hinted = (
-                f", подсказок {len(self.transcript.hints.split(','))}"
+                f", подсказка в {len(self.transcript.hints.split())} слов"
                 if self.transcript.hints else ""
             )
             lines.append(f"**Распознано:** модель {self.transcript.model}{hinted}  ")

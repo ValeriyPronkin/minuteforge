@@ -97,3 +97,25 @@ def test_the_time_is_kept_apart_from_the_day():
     # То, что подставлено в поле, должно разбираться обратно: иначе сроки
     # посчитаются не от той даты.
     assert parse_meeting_date(Recorded(date(2026, 9, 7), "11:00").as_text()) == date(2026, 9, 7)
+
+def test_a_range_of_days_is_not_a_date():
+    """«Сделать к 7-8» — это седьмое-восьмое число, а числовой разбор читает
+    это как 7.08. На записи 27 августа такой срок вышел на три недели раньше
+    самого совещания."""
+    from datetime import date
+
+    from minuteforge.dates import resolve
+
+    assert resolve("к 7-8", date(2026, 8, 27)) is None
+
+
+def test_a_numeric_date_behind_the_meeting_is_not_a_deadline():
+    """Сроком назад не назначают — и для чисел это так же, как для слов.
+    Раньше защита стояла только на «до 15 октября», а «до 15.10.2025»
+    проходило насквозь."""
+    from datetime import date
+
+    from minuteforge.dates import resolve
+
+    assert resolve("до 15.10.2025", date(2026, 8, 27)) is None
+    assert resolve("до 15.10", date(2026, 8, 27)) == date(2026, 10, 15)

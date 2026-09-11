@@ -224,23 +224,38 @@ def _exact_date(lowered: str, meeting: date) -> date | None:
     dotted = _DOTTED.search(lowered)
     if dotted:
         day, month, year = dotted.groups()
-        return _make(int(day), int(month), _full_year(year) if year else meeting.year)
+        named = _make(int(day), int(month), _full_year(year) if year else meeting.year)
+        # Год назван — значит назван и он: перенести такую дату на следующий
+        # год означало бы поправить сказанное.
+        return _not_behind(named, meeting, roll_year=not year)
     spelled = _DAY_MONTH.search(lowered)
     if spelled:
         day, word = spelled.groups()
         month = _month_of(word)
         if month:
-            named = _make(int(day), month, meeting.year)
-            if named and named < meeting:
-                # Далеко позади — значит, речь о следующем годе: «до 15
-                # января», сказанное в декабре, это январь следующего.
-                if (meeting - named).days > _LOOKS_LIKE_NEXT_YEAR:
-                    return _make(int(day), month, meeting.year + 1)
-                # А недавно прошедшая дата — не срок, а ссылка на прошлое:
-                # «по информации на 2 сентября готовность 84%». Сроком
-                # назад не назначают.
-                return None
-            return named
+            return _not_behind(_make(int(day), month, meeting.year), meeting, roll_year=True)
+    return None
+
+
+def _not_behind(named: date | None, meeting: date, *, roll_year: bool) -> date | None:
+    """Отсеивает дату, которая стоит раньше самого совещания.
+
+    Сроком назад не назначают. Прошедшее число в реплике — ссылка на
+    прошлое: «по информации на 2 сентября готовность 84%», «устранить
+    замечания, выставленные на 24 августа».
+
+    Числовую запись это заодно спасает от разбора диапазона как даты:
+    «сделать к 7-8» — это седьмое-восьмое число, а читается как 7.08. На
+    записи 27 августа такой «срок» вышел на три недели раньше совещания.
+    Что имелось в виду, из фразы не видно, и пустая графа честнее.
+
+    Далеко позади — другое дело: «до 15 января», сказанное в декабре, это
+    январь следующего года.
+    """
+    if named is None or named >= meeting:
+        return named
+    if roll_year and (meeting - named).days > _LOOKS_LIKE_NEXT_YEAR:
+        return _make(named.day, named.month, meeting.year + 1)
     return None
 
 

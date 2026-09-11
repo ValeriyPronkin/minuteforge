@@ -57,3 +57,19 @@ def test_filler_sentence_across_the_meeting_is_reported_once():
     assert len(found) == 1
     assert found[0].count == 4
     assert found[0].moments == [6372.0, 9000.0]
+
+def test_an_echoed_hint_is_named_as_such():
+    """На трудном куске Whisper вместо расшифровки продолжает подсказку. В
+    журнале это выглядит обычным повтором, и связать одно с другим человек
+    может только зная, что искать."""
+    from minuteforge.blocks import Block
+    from minuteforge.checks import suspicious
+
+    hint = "Обсуждают работу регоператора и ликвидацию навалов на площадках."
+    blocks = [Block("SPEAKER_01", hint, start, start + 20) for start in (60, 90, 120, 150)]
+
+    only = suspicious(blocks, hints=hint)[0]
+    assert "повторяет подсказку" in only.reason
+
+    # без подсказки то же самое остаётся обычным повтором
+    assert "Повторяется" in suspicious(blocks)[0].reason

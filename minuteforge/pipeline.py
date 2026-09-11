@@ -567,7 +567,7 @@ def _text_with_head(transcript: Transcript, marks: Sequence[Suspicion] | None = 
     # Подозрительные места — тут же, в шапке, а не отдельным файлом: тот, кто
     # читает стенограмму, должен наткнуться на них прежде, чем поверит тексту.
     if marks is None:
-        marks = suspicious(transcript.blocks)
+        marks = suspicious(transcript.blocks, transcript.hints)
     head.extend(f"# ПРОВЕРИТЬ. {item.as_line()}" for item in marks)
     body = transcript.as_text(with_time=True)
     return "\n".join([*head, "", body]) if head else body
@@ -595,7 +595,7 @@ def save_transcript(
     # подразделение отдельным файлом, без интерфейса и без лога, и там
     # должно быть видно, чем она сделана: спор о том, «Ессентуки» или
     # «Исинтуки» сказал докладчик, решается именно этим.
-    marks = suspicious(transcript.blocks)
+    marks = suspicious(transcript.blocks, transcript.hints)
     text.write_text(_text_with_head(transcript, marks), encoding="utf-8")
 
     data = _free_name(out_dir / f"{stem}.json")

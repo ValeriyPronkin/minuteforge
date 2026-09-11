@@ -838,7 +838,7 @@ if transcript.hints:
 st.write(summary)
 for note in transcript.notes:
     st.warning(f"Не хватило видеопамяти: {note}. Качество расшифровки будет ниже.")
-doubtful = suspicious(transcript.blocks)
+doubtful = suspicious(transcript.blocks, transcript.hints)
 if doubtful:
     # Не прячем за галочкой и не выбрасываем: выдумка распознавания читается
     # как настоящая речь, и попадёт в протокол, если о ней не сказать.

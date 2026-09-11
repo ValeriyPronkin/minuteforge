@@ -86,11 +86,19 @@ class Suspicion:
         return f"{self.reason}: «{_short(self.phrase)}» — {where}"
 
 
-def suspicious(blocks: Iterable[Block]) -> list[Suspicion]:
+def suspicious(blocks: Iterable[Block], hints: str = "") -> list[Suspicion]:
     """Ищет в стенограмме следы выдумки.
 
     Возвращает найденное в порядке появления в записи — так его и читают,
     сверяя с исходной записью по времени.
+
+    :param hints: чем подсказывали распознаванию. Нужен, чтобы отличить
+        обычную галлюцинацию от эха подсказки: на трудном куске Whisper
+        вместо расшифровки продолжает то, что ему подали как предыдущий
+        текст. На записи штаба связная подсказка так съела три четверти
+        речи в получасовом окне — а в журнале это выглядело обычным
+        «повторяется 20 раз подряд», и связать одно с другим человек мог
+        только зная, что искать.
     """
     seen: dict[str, list[float]] = {}
     original: dict[str, str] = {}
@@ -103,11 +111,18 @@ def suspicious(blocks: Iterable[Block]) -> list[Suspicion]:
             seen.setdefault(key, []).append(block.start if block.start is not None else 0.0)
             original.setdefault(key, sentence)
 
+    hinted = {_normalize(sentence) for sentence in _sentences(hints)} - {""}
     found: list[Suspicion] = []
     for key, moments in seen.items():
         reason = _why(key, moments)
-        if reason:
-            found.append(Suspicion(phrase=original[key], at=moments, reason=reason))
+        if not reason:
+            continue
+        if key in hinted:
+            reason = (
+                "Модель повторяет подсказку вместо речи — уберите "
+                "asr_hints_file и распознайте заново"
+            )
+        found.append(Suspicion(phrase=original[key], at=moments, reason=reason))
 
     found.sort(key=lambda item: item.at[0])
     return found

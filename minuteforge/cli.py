@@ -344,7 +344,7 @@ def command_recognize(args: argparse.Namespace) -> int:
         print(f"  ВНИМАНИЕ: не хватило видеопамяти — {note}")
     if transcript.model:
         print(f"Распознано моделью: {transcript.model}")
-    for item in suspicious(transcript.blocks):
+    for item in suspicious(transcript.blocks, transcript.hints):
         print(f"  ПРОВЕРИТЬ. {item.as_line()}")
     print(f"Реплик: {len(transcript.blocks)}, говорящих: {len(transcript.speakers)}")
     print(f"Метки: {', '.join(transcript.speakers)}")

@@ -238,6 +238,7 @@ def transcribe_meeting(
     # и в командной строке.
     transcript.notes = list(recognition.fallbacks)
     transcript.model = recognition.asr_model
+    transcript.hints = recognition.hints
     return transcript
 
 
@@ -561,6 +562,8 @@ def _text_with_head(transcript: Transcript, marks: Sequence[Suspicion] | None = 
     if transcript.model:
         head.append(f"# Распознано моделью {transcript.model}")
     head.extend(f"# {note}" for note in transcript.notes)
+    if transcript.hints:
+        head.append(f"# Распознано с подсказками: {transcript.hints}")
     # Подозрительные места — тут же, в шапке, а не отдельным файлом: тот, кто
     # читает стенограмму, должен наткнуться на них прежде, чем поверит тексту.
     if marks is None:
@@ -606,6 +609,7 @@ def save_transcript(
             {
                 "model": transcript.model,
                 "notes": list(transcript.notes),
+                "hints": transcript.hints,
                 "segments": [
                     {"speaker": b.speaker, "text": b.text, "start": b.start, "end": b.end}
                     for b in transcript.blocks

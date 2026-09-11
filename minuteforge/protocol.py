@@ -141,7 +141,11 @@ class Protocol:
             # расшифровки, а расшифровки разных моделей отличаются фамилиями и
             # цифрами. Тот, кто будет с документом спорить, должен знать, по
             # чему он составлен.
-            lines.append(f"**Распознано:** модель {self.transcript.model}  ")
+            hinted = (
+                f", подсказок {len(self.transcript.hints.split(','))}"
+                if self.transcript.hints else ""
+            )
+            lines.append(f"**Распознано:** модель {self.transcript.model}{hinted}  ")
         lines.append("")
 
         lines.append("## Поручения")

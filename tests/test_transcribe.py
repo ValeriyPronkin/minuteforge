@@ -510,3 +510,21 @@ def test_no_hints_file_means_recognition_as_before(tmp_path):
 
     assert read_hints(None) == ""
     assert read_hints(tmp_path / "нет-такого.txt") == ""
+
+
+def test_the_transcript_remembers_it_was_hinted(tmp_path):
+    """Подсказки меняют саму расшифровку. Молча это худший случай: два
+    прогона расходятся, а отчего — непонятно."""
+    from minuteforge.blocks import Block, Transcript
+    from minuteforge.pipeline import save_transcript
+
+    transcript = Transcript([Block("SPEAKER_01", "Регоператор доложит в среду.", 0, 5)])
+    transcript.model = "large-v3"
+    transcript.hints = "регоператор, ТКО."
+
+    where = save_transcript(transcript, tmp_path)
+    assert "Распознано с подсказками: регоператор, ТКО." in where["text"].read_text(encoding="utf-8")
+
+    from minuteforge.cli import load_transcript
+
+    assert load_transcript(where["json"]).hints == "регоператор, ТКО."

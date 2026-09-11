@@ -207,6 +207,7 @@ def transcript_from_state() -> Transcript | None:
     # кнопки — а вместе с ней и предупреждение о нехватке видеопамяти.
     transcript.model = st.session_state.get("asr_model", "")
     transcript.notes = list(st.session_state.get("notes", []))
+    transcript.hints = st.session_state.get("asr_hints", "")
     return transcript
 
 
@@ -685,6 +686,7 @@ if ready_segments is not None:
     known = isinstance(loaded, dict)
     st.session_state["segments"] = loaded.get("segments", []) if known else loaded
     st.session_state["asr_model"] = str(loaded.get("model") or "") if known else ""
+    st.session_state["asr_hints"] = str(loaded.get("hints") or "") if known else ""
     st.session_state["notes"] = (
         [str(note) for note in loaded.get("notes") or []] if known else []
     )
@@ -761,6 +763,7 @@ if source_path is not None or uploaded is not None:
                 for b in transcript.blocks
             ]
             st.session_state["asr_model"] = transcript.model
+            st.session_state["asr_hints"] = transcript.hints
             st.session_state["notes"] = list(transcript.notes)
             # Кладём сразу в папку: «Загрузки» на этой машине — не то место,
             # откуда стенограмму заберёт другое подразделение.
@@ -802,6 +805,11 @@ summary = (
 )
 if transcript.model:
     summary += f", модель: **{transcript.model}**"
+if transcript.hints:
+    # Подсказки меняют саму расшифровку, а значит и всё, что из неё
+    # выписано. Молча это худший случай: два прогона расходятся, а отчего —
+    # непонятно.
+    summary += f", подсказок: **{len(transcript.hints.split(','))}**"
 st.write(summary)
 for note in transcript.notes:
     st.warning(f"Не хватило видеопамяти: {note}. Качество расшифровки будет ниже.")

@@ -112,6 +112,10 @@ class Recognition:
     batch_size: int = 0
     #: Что пришлось уступить. Пусто — прошло как заказано.
     fallbacks: list[str] = field(default_factory=list)
+    #: С какими подсказками распознавали. Реквизит наравне с моделью:
+    #: расшифровка с подсказками — другая расшифровка, и сравнивать её с
+    #: прежней можно, только зная об этом.
+    hints: str = ""
 
 
 def free_vram(torch_module: Any | None = None) -> bool:
@@ -329,6 +333,7 @@ def _transcribe_with_fallback(
     """
     ladder = _ladder_from(settings.asr_model)
     last_error: BaseException | None = None
+    result.hints = read_hints(settings.asr_hints_file)
 
     for model in ladder:
         batch = max(1, settings.batch_size)
@@ -340,7 +345,7 @@ def _transcribe_with_fallback(
                     language=settings.language,
                     batch_size=batch,
                     device=device,
-                    hints=read_hints(settings.asr_hints_file),
+                    hints=result.hints,
                 )
             except Exception as exc:
                 if not is_out_of_memory(exc):

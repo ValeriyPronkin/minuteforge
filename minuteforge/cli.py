@@ -189,6 +189,7 @@ def load_transcript(path: Path) -> Transcript:
     if isinstance(body, dict):
         transcript.model = str(body.get("model") or "")
         transcript.notes = [str(note) for note in body.get("notes") or []]
+        transcript.hints = str(body.get("hints") or "")
     return transcript
 
 

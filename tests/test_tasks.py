@@ -442,6 +442,60 @@ def test_a_collective_executor_needs_no_name_nearby():
     assert attached[0].who == "все регионы"
 
 
+def test_the_one_who_gave_the_order_is_not_its_executor():
+    """Окно уходит в модель с подписями говорящих, и она отдаёт адресатом
+    имя ведущего: он же и поручает. На записи штаба так вышло в десяти
+    строках из двадцати пяти."""
+    from minuteforge.blocks import Block
+    from minuteforge.chunking import Chunk
+    from minuteforge.tasks import Task, attach_source
+
+    blocks = [Block(
+        "Ковач Наталья Юрьевна",
+        "Вы, пожалуйста, на своем штабе первопричины найдите и разберитесь.",
+        0, 20,
+    )]
+    chunk = Chunk(blocks, index=1, total=1)
+
+    attached = attach_source(
+        [Task(what="Найти первопричины и разобраться", who="Ковач Наталья Юрьевна")],
+        chunk,
+    )
+    assert attached[0].who == ""
+
+
+def test_the_one_who_took_it_on_himself_stays_the_executor():
+    """Обратный случай: человек взялся сделать сам. Это такое же поручение,
+    и отличает его лицо глагола — «доложу» против «доложите»."""
+    from minuteforge.blocks import Block
+    from minuteforge.chunking import Chunk
+    from minuteforge.tasks import Task, attach_source
+
+    blocks = [Block(
+        "Ковач Наталья Юрьевна",
+        "Хорошо, я подготовлю справку по инцидентам и доложу на следующем штабе.",
+        0, 20,
+    )]
+    chunk = Chunk(blocks, index=1, total=1)
+
+    attached = attach_source(
+        [Task(what="Подготовить справку по инцидентам", who="Ковач Наталья Юрьевна")],
+        chunk,
+    )
+    assert attached[0].who == "Ковач Наталья Юрьевна"
+
+
+def test_reporting_what_is_already_done_is_not_taking_it_on():
+    """«Обеспечиваем» — доклад о том, что и так делается, а не обязательство.
+    Основа глагола их не различает, поэтому формы перечислены целиком."""
+    from minuteforge.tasks import took_it_on
+
+    assert took_it_on("Мы обеспечим вывоз до конца недели")
+    assert took_it_on("Доложу на следующем заседании")
+    assert not took_it_on("Мы обеспечиваем вывоз ежедневно")
+    assert not took_it_on("Обеспечьте вывоз до конца недели")
+
+
 # ------------------------------------------- свои указания модели
 
 def test_extra_instructions_are_appended_not_replacing():

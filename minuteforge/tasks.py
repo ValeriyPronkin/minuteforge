@@ -1519,9 +1519,14 @@ def attach_source(tasks: list[Task], chunk: Chunk) -> list[Task]:
         words = _significant(task.what)
         found = _best_sentence(words, chunk) if words else None
         block = found.block if found else None
+        who = task.who if _who_holds(task.who, block, chunk) else ""
+        if found is not None and _said_it_himself(who, found):
+            # Поручают одному, а исполняет другой. Пустая графа заставит
+            # уточнить перед рассылкой, неверная уйдёт в рассылку как есть.
+            who = ""
         attached.append(Task(
             what=task.what,
-            who=task.who if _who_holds(task.who, block, chunk) else "",
+            who=who,
             due=task.due, chunk=task.chunk,
             at=found.at if found else None,
             quote=found.quote if found else "",
@@ -1589,6 +1594,53 @@ def _named_in(text: str, who: str) -> bool:
         if (word[:-2] if len(word) > 5 else word) in lowered:
             return True
     return False
+
+
+#: Чем говорящий берёт работу на себя. Форма перечислена целиком, а не
+#: основой с окончанием: «обеспечиваем» — это доклад о том, что и так
+#: делается, а «обеспечим» — обязательство, и основа их не различает.
+#: Написание через «е»: «ё» приводится к ней перед сверкой.
+TOOK_IT_ON = frozenset("""
+подготовлю подготовим доложу доложим направлю направим обеспечу обеспечим
+сделаю сделаем проработаю проработаем представлю представим соберу соберем
+возьму возьмем беру берем отправлю отправим проведу проведем уточню уточним
+запрошу запросим отработаю отработаем выполню выполним организую организуем
+подключу подключим вынесу вынесем
+""".split())
+
+
+def took_it_on(text: str) -> bool:
+    """Взялся ли говорящий сделать это сам.
+
+    Тогда он исполнитель по праву: «доложу на следующем штабе» — такое же
+    поручение, как «доложите», только взятое на себя. Отличает их лицо
+    глагола, и оно же — единственная примета: «доложу» против «доложите».
+    """
+    lowered = (text or "").lower().replace("ё", "е")
+    return any(word in TOOK_IT_ON for word in re.findall(r"\w+", lowered))
+
+
+def _said_it_himself(who: str, found: "Source") -> bool:
+    """Назначен ли исполнителем тот, кто это поручение и произнёс.
+
+    Окно уходит в модель с подписями говорящих, и мелкая модель отдаёт
+    адресатом то имя, которое в нём видит, — а видит она чаще всего имя
+    ведущего: он и поручает. На записи штаба так вышло в десяти строках из
+    двадцати пяти: председательствующий назначен исполнителем собственных
+    поручений, а велено было региону, к которому обращались.
+
+    Обратный случай — когда человек берётся сам — оставляем: его отличает
+    первое лицо, :func:`took_it_on`.
+
+    Проверка не про председателя, а про любого говорящего: имя ведущего в
+    шапке протокола бывает не тем, каким подписан его голос в стенограмме,
+    и защита по одному имени такой случай пропускает.
+    """
+    if not who or not found.said_by or who in COLLECTIVE_NAMES:
+        return False
+    if not same_person(who, found.said_by):
+        return False
+    return not took_it_on(found.quote) and not took_it_on(found.context)
 
 
 @dataclass

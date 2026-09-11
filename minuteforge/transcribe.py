@@ -23,6 +23,7 @@ from typing import Any, Callable, Protocol, Sequence
 
 from loguru import logger
 
+from .chunking import estimate_tokens
 from .config import HF_TOKEN_ENV, Settings
 from .progress import Progress, Step, report
 
@@ -52,7 +53,10 @@ class Backend(Protocol):
     видеокарты и без моделей: подставляется заглушка.
     """
 
-    def transcribe(self, audio: str, *, model: str, language: str, batch_size: int, device: str) -> dict: ...
+    def transcribe(
+        self, audio: str, *, model: str, language: str, batch_size: int,
+        device: str, hints: str = "",
+    ) -> dict: ...
 
     def align(self, segments: list[dict], *, language: str, audio: str, device: str) -> dict: ...
 
@@ -336,6 +340,7 @@ def _transcribe_with_fallback(
                     language=settings.language,
                     batch_size=batch,
                     device=device,
+                    hints=read_hints(settings.asr_hints_file),
                 )
             except Exception as exc:
                 if not is_out_of_memory(exc):
@@ -507,6 +512,68 @@ def _cuda_available() -> bool:
     return bool(torch.cuda.is_available())
 
 
+#: Названия колонок, которыми открывается файл-справочник. Подсказкой они
+#: не являются: «ФИО» на совещании не произносят.
+HEADINGS = frozenset({
+    "фио", "фамилия", "имя", "участник", "участники", "слово", "слова",
+    "термин", "термины", "название",
+})
+
+#: Сколько подсказки принимает Whisper. Окно модели — 448 токенов, половина
+#: отведена под предыдущий текст, и всё сверх этого она отбрасывает молча.
+#: Поэтому режем сами и говорим, что не поместилось.
+HINT_TOKENS = 200
+
+
+def read_hints(path: "str | Path | None") -> str:
+    """Свои слова для распознавания — одной строкой, как их ждёт Whisper.
+
+    Подсказка — это не список, а текст, который модель считает сказанным
+    перед записью. Поэтому слова идут через запятую: так она принимает их за
+    перечисление, а не за начало фразы, которую надо продолжить.
+
+    Файл: по слову в строке или csv — тогда берётся первая колонка, и
+    годится тот же `участники.csv`, что разобран из списка приглашённых.
+
+    Не поместившееся отбрасывается здесь, а не в модели, и попадает в
+    журнал: молча укоротить подсказку значит оставить человека гадать,
+    почему половина фамилий по-прежнему перевирается.
+    """
+    if not path:
+        return ""
+    try:
+        lines = Path(path).read_text(encoding="utf-8-sig").splitlines()
+    except OSError as exc:
+        logger.warning("Не прочитать подсказки {}, распознаю без них: {}", path, exc)
+        return ""
+
+    words: list[str] = []
+    for line in lines:
+        word = line.split(";")[0].split(",")[0].strip()
+        if word and word not in words:
+            words.append(word)
+    if words and words[0].lower() in HEADINGS:
+        # Первая строка csv — название колонки, а не слово. «ФИО» в
+        # подсказке сбивает модель: она такого на совещании не услышит.
+        words.pop(0)
+    if not words:
+        return ""
+
+    kept: list[str] = []
+    while words and estimate_tokens(", ".join(kept + words[:1])) <= HINT_TOKENS:
+        kept.append(words.pop(0))
+    if words:
+        logger.warning(
+            "Подсказок больше, чем принимает Whisper: взяты первые {}, "
+            "отброшено {} ({}…). Важное ставьте в начало файла. Если это "
+            "список участников — оставьте в нём одни фамилии: их влезет "
+            "втрое больше, а коверкает распознавание прежде всего их.",
+            len(kept), len(words), ", ".join(words[:3]),
+        )
+    logger.info("Подсказки распознаванию: {} слов", len(kept))
+    return ", ".join(kept) + "."
+
+
 def _whisperx_backend() -> Backend:
     """Настоящий WhisperX. Ввозится лениво — его может не быть вовсе."""
     try:
@@ -522,12 +589,29 @@ def _whisperx_backend() -> Backend:
 class _WhisperX:  # pragma: no cover — требует моделей и видеокарты
     """Тонкая обёртка: вызовы WhisperX и ничего больше."""
 
-    def transcribe(self, audio: str, *, model: str, language: str, batch_size: int, device: str) -> dict:
+    def transcribe(
+        self, audio: str, *, model: str, language: str, batch_size: int,
+        device: str, hints: str = "",
+    ) -> dict:
         import whisperx
 
-        asr = whisperx.load_model(
-            model, device, language=language, compute_type=compute_type_for(device)
-        )
+        common = dict(language=language, compute_type=compute_type_for(device))
+        try:
+            asr = whisperx.load_model(
+                model, device,
+                asr_options={"initial_prompt": hints} if hints else None,
+                **common,
+            )
+        except TypeError as exc:
+            # Ранние whisperx не знают ``asr_options``. Молча считать без
+            # подсказок нельзя: распознавание без них другое, и человек
+            # должен знать, что получил именно его.
+            logger.warning(
+                "Распознавание без подсказок: whisperx их не принимает ({}). "
+                "Расшифровка выйдет прежней, но фамилии и термины в ней "
+                "будут коверкаться чаще.", exc,
+            )
+            asr = whisperx.load_model(model, device, **common)
         sound = whisperx.load_audio(audio)
         try:
             return asr.transcribe(sound, batch_size=batch_size)

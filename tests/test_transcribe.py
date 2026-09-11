@@ -18,7 +18,7 @@ class FakeBackend:
     def __init__(self):
         self.calls = []
 
-    def transcribe(self, audio, *, model, language, batch_size, device):
+    def transcribe(self, audio, *, model, language, batch_size, device, hints=""):
         self.calls.append("transcribe")
         return {"segments": [{"text": "Начнём."}], "language": language}
 
@@ -320,7 +320,7 @@ class GreedyBackend(FakeBackend):
         self.works_model, self.works_batch = works_with
         self.attempts = []
 
-    def transcribe(self, audio, *, model, language, batch_size, device):
+    def transcribe(self, audio, *, model, language, batch_size, device, hints=""):
         self.attempts.append((model, batch_size))
         if model != self.works_model or batch_size > self.works_batch:
             raise OutOfMemoryError("CUDA out of memory. Tried to allocate 2.00 GiB")
@@ -467,3 +467,46 @@ def test_alignment_gets_everything_when_nothing_is_short():
 
     assert result["segments"] == segments
     assert "word_segments" in result
+
+def test_hints_are_a_phrase_not_a_list(tmp_path):
+    """Подсказка — текст, который модель считает сказанным перед записью.
+    Через запятую она принимает его за перечисление, а не за начало фразы,
+    которую надо продолжить."""
+    from minuteforge.transcribe import read_hints
+
+    words = tmp_path / "слова.txt"
+    words.write_text("регоператор\nтерриториальная схема\n", encoding="utf-8")
+
+    assert read_hints(words) == "регоператор, территориальная схема."
+
+
+def test_a_column_heading_is_not_a_hint(tmp_path):
+    """Годится тот же участники.csv, что разобран из списка приглашённых, —
+    но «ФИО» на совещании не произносят, и подсказкой это не слово."""
+    from minuteforge.transcribe import read_hints
+
+    people = tmp_path / "участники.csv"
+    people.write_text("ФИО;Должность\nКовач Наталья Юрьевна;министр\n", encoding="utf-8")
+
+    assert read_hints(people) == "Ковач Наталья Юрьевна."
+
+
+def test_hints_longer_than_whisper_takes_are_cut_out_loud(tmp_path, caplog):
+    """Лишнее Whisper отбрасывает молча, и человек остаётся гадать, почему
+    половина фамилий по-прежнему перевирается."""
+    from minuteforge.transcribe import HINT_TOKENS, read_hints
+
+    words = tmp_path / "слова.txt"
+    words.write_text("\n".join(f"Фамилия{n}" for n in range(400)), encoding="utf-8")
+
+    hints = read_hints(words)
+    assert len(hints) / 3 <= HINT_TOKENS + 1
+    assert hints.startswith("Фамилия0, Фамилия1,")
+
+
+def test_no_hints_file_means_recognition_as_before(tmp_path):
+    """Без файла всё работает как прежде: подсказка необязательна."""
+    from minuteforge.transcribe import read_hints
+
+    assert read_hints(None) == ""
+    assert read_hints(tmp_path / "нет-такого.txt") == ""

@@ -274,7 +274,7 @@ def test_a_standing_order_gets_no_date():
 
 def test_orders_to_one_addressee_become_one_point():
     """В документе поручения не лежат плоским списком: один адресат — один
-    пункт, несколько поручений — подпунктами, общий срок под ними."""
+    пункт, подпункты через точку с запятой, общий срок под ними."""
     protocol = build_protocol(
         [
             Task("Ускорить заключение соглашения", unit="Первая площадка", due_date="20.09.2026"),
@@ -285,9 +285,28 @@ def test_orders_to_one_addressee_become_one_point():
 
     decisions = protocol.fields()["decisions"]
     assert decisions.startswith("1. Рекомендовать руководству первой площадки:")
-    assert "- ускорить заключение соглашения;" in decisions
-    assert "- обеспечить установку видеонаблюдения." in decisions
+    assert "ускорить заключение соглашения; обеспечить установку" in decisions
     assert "Срок: 20.09.2026." in decisions
+
+
+def test_long_orders_are_broken_into_lines():
+    """Строкой идут только короткие подпункты — так они и стоят в
+    подписанном протоколе. Строка в пол-страницы не читается, сколько её ни
+    разделяй точками с запятой."""
+    long_one = "обеспечить " + "установку видеонаблюдения на объекте " * 4
+    protocol = build_protocol(
+        [
+            Task(long_one.capitalize(), unit="Первая площадка", due_date="20.09.2026"),
+            Task(long_one.capitalize(), unit="Первая площадка", due_date="20.09.2026"),
+        ],
+        addressees={"Первая площадка": "Рекомендовать руководству первой площадки"},
+    )
+
+    lines = protocol.fields()["decisions"].splitlines()
+    assert lines[0] == "1. Рекомендовать руководству первой площадки:"
+    assert lines[1].startswith("- ")
+    assert lines[1].endswith(";")
+    assert lines[2].endswith(".")
 
 
 def test_a_single_order_needs_no_sublist():

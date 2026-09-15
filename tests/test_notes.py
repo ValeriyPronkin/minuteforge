@@ -246,7 +246,7 @@ def test_the_section_is_rendered_before_the_orders():
     )
     text = protocol.as_markdown()
     assert "## Отметили" in text
-    assert text.index("## Отметили") < text.index("## Поручения")
+    assert text.index("## Отметили") < text.index("## Решили")
     assert "Северный филиал" in text
     assert "- Ввод в декабре." in text
 

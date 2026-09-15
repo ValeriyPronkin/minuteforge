@@ -23,6 +23,13 @@ from .notes import Note
 from .people import Person, canonical, find
 from .tasks import Task
 
+#: До какой длины подпункты пишутся строкой через точку с запятой. Мерка
+#: подогнана под подписанный протокол: там пункт из трёх коротких поручений
+#: стоит строкой, а из трёх длинных — списком. Точного правила у
+#: делопроизводства тут нет, а форма всё равно перебивается своим шаблоном
+#: (`form_file`).
+INLINE = 260
+
 
 @dataclass
 class Protocol:
@@ -157,11 +164,19 @@ class Protocol:
             lines.extend(_note_lines(self.notes, self.unit_label))
             lines.append("")
 
-        lines.append("## Поручения")
+        lines.append("## Решили")
         lines.append("")
         if not self.tasks:
             lines.append("Поручений не зафиксировано.")
         else:
+            lines.extend(_decision_lines(self.decisions, self.decision_formula))
+            lines.append("")
+            # Таблица — не второй раздел документа, а рабочая опора: по
+            # времени возвращаются к месту в записи, по графе «Исполнитель»
+            # видят, кого назвали вслух. В разосланном протоколе её не
+            # оставляют, поэтому и заголовок у неё служебный.
+            lines.append("### Поручения построчно — для сверки с записью")
+            lines.append("")
             lines.extend(_task_table(self.actionable, self.unit_label))
             if self.needs_clarification:
                 lines.append("")
@@ -430,13 +445,25 @@ def _decision_lines(decisions: Sequence[Decision], formula: str = "") -> list[st
             lines.append(f"{number}. {addressee}: {_said(point.tasks[0])}.")
             lines.append("")
             continue
-        lines.append(f"{number}. {addressee}:")
-        for position, task in enumerate(point.tasks, 1):
-            said = _said(task)
+        said = []
+        for task in point.tasks:
+            one = _said(task)
             if not common and (task.due or task.due_date):
-                said = f"{said}, срок — {_on_date(task)}"
-            end = "." if position == len(point.tasks) else ";"
-            lines.append(f"- {said}{end}")
+                one = f"{one}, срок — {_on_date(task)}"
+            said.append(one)
+        run = "; ".join(said)
+        if len(run) <= INLINE:
+            # Коротким пунктом подпункты идут строкой через точку с запятой —
+            # так они и стоят в подписанном протоколе. Длинные разносятся по
+            # строкам: строка в пол-страницы не читается, сколько её ни
+            # разделяй.
+            lines.append(f"{number}. {addressee}: {run}.")
+        else:
+            lines.append(f"{number}. {addressee}:")
+            lines.extend(
+                f"- {one}{'.' if position == len(said) else ';'}"
+                for position, one in enumerate(said, 1)
+            )
         if common:
             lines.append(f"Срок: {common}.")
         lines.append("")

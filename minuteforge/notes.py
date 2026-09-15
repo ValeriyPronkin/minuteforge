@@ -33,6 +33,7 @@ from loguru import logger
 
 from .blocks import Block
 from .chunking import Chunk, piece, split_into_chunks
+from .dates import NUMERALS
 from .directory import Directory, at
 from .llm import LLMClient, LLMError
 from .progress import Progress, Step, report
@@ -491,6 +492,23 @@ def _why_dropped(thesis: str, source: str) -> str:
 #: Число в тексте: 93,5 · 42 · 2026 · 15.
 _NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
 
+#: Числа, названные словами. В речи их называют словами чаще, чем цифрами —
+#: «полтора года», «полторы тысячи площадок», «два процента», — а модель
+#: послушно переводит их в цифры. Без этой таблицы верный пересказ выглядел
+#: бы выдумкой: «1,5 года» в куске не звучало, звучало «полтора».
+_SPOKEN = {
+    "полтора": 1.5, "полторы": 1.5, "полутора": 1.5,
+    "двадцать": 20, "тридцать": 30, "сорок": 40, "пятьдесят": 50,
+    "шестьдесят": 60, "семьдесят": 70, "восемьдесят": 80, "девяносто": 90,
+    "сто": 100, "двести": 200, "триста": 300, "четыреста": 400,
+    "пятьсот": 500, "шестьсот": 600, "семьсот": 700, "восемьсот": 800,
+    "девятьсот": 900,
+}
+
+#: Во сколько раз больше: «полторы тысячи» — это 1500.
+_SCALES = (("тысяч", 1000), ("тыщ", 1000), ("миллион", 1_000_000),
+           ("миллиард", 1_000_000_000))
+
 
 def _invented_numbers(thesis: str, source: str) -> set[str]:
     """Числа тезиса, которых в куске не звучало.
@@ -505,10 +523,47 @@ def _invented_numbers(thesis: str, source: str) -> set[str]:
     строгое требование: не прозвучало — тезиса нет.
     """
     said = {_as_number(found) for found in _NUMBER.findall(source or "")}
+    said |= _spoken_numbers(source)
     return {
         found for found in _NUMBER.findall(thesis or "")
         if _as_number(found) not in said
     }
+
+
+def _spoken_numbers(text: str) -> set[str]:
+    """Числа, названные в тексте словами.
+
+    Разбор нарочно грубый: нужно не понять число, а узнать, звучало ли оно.
+    Собирается числительное с множителем — «полторы тысячи» это 1500, «пять
+    тысяч» это 5000, — а всё сложнее этого в речи попадается редко и цена
+    промаха мала: лишнее число в списке всего лишь пропустит тезис, который
+    и так пересказан верно.
+    """
+    found: set[float] = set()
+    value: float | None = None
+    for word in re.findall(r"[а-яё]+", (text or "").lower()):
+        scale = next((size for stem, size in _SCALES if word.startswith(stem)), None)
+        if scale is not None:
+            found.add((value if value is not None else 1) * scale)
+            value = None
+            continue
+        number = _SPOKEN.get(word, NUMERALS.get(word))
+        if number is not None:
+            if value is not None:
+                found.add(value)
+            value = number
+            continue
+        if value is not None:
+            found.add(value)
+            value = None
+    if value is not None:
+        found.add(value)
+    return {_as_number(_written(number)) for number in found}
+
+
+def _written(number: float) -> str:
+    """«1.5» → «1,5», «1500.0» → «1500»."""
+    return f"{number:g}".replace(".", ",")
 
 
 def _as_number(text: str) -> str:

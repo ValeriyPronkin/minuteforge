@@ -183,6 +183,39 @@ def split_into_reports(
     return reports, outside
 
 
+def marks_by_content(
+    blocks: Sequence[Block],
+    directory: Directory,
+    *,
+    hosts: Iterable[str] = (),
+) -> list[tuple[float, str]]:
+    """Разметка разбора, уточнённая содержанием отрезков.
+
+    :meth:`Directory.follow` ставит отметку по объявлению: прозвучало
+    «Следующий регион» без названия — отметка пустая, и всё, что дальше
+    поручено, остаётся без направления. Отрезок при этом закрыт с обеих
+    сторон объявлениями, и заглянуть внутрь него безопасно: названо одно
+    направление — оно и разбирается, названо несколько — это общий доклад.
+
+    Тем же способом собирается раздел «Отметили», и в этом всё дело.
+    Прежде две половины протокола расходились: «Отметили» знал, что
+    01:22–01:25 это Калмыкия, а «Решили» не знал, и три поручения оттуда
+    уходили в раздел «Требуют уточнения». Один и тот же кусок записи не
+    может принадлежать разным направлениям в двух разделах одного
+    документа.
+    """
+    marks: list[tuple[float, str]] = []
+    for name, run in _runs(blocks, directory, hosts=hosts):
+        if not name:
+            name = _recognize(run, directory)
+        start = next((block.start for block in run if block.start is not None), None)
+        if start is None:
+            continue
+        if not marks or marks[-1][1] != name:
+            marks.append((start, name))
+    return marks
+
+
 def _runs(
     blocks: Sequence[Block],
     directory: Directory,

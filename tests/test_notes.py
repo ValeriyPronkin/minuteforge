@@ -11,9 +11,11 @@ from minuteforge.notes import (
     _read,
     _why_dropped,
     _without_repeats,
+    marks_by_content,
     split_into_reports,
     take_notes,
 )
+from minuteforge.directory import at
 from minuteforge.protocol import build_protocol
 
 
@@ -254,3 +256,33 @@ def test_the_section_is_rendered_before_the_orders():
 def test_without_notes_there_is_no_empty_section():
     """Пустой заголовок выглядит потерянным содержимым."""
     assert "## Отметили" not in build_protocol([]).as_markdown()
+
+
+def test_the_round_is_marked_by_what_was_said_inside_it():
+    """Объявили «следующий филиал», название не назвали — а поручение оттуда
+    всё равно чьё-то. Отрезок закрыт объявлениями с обеих сторон, и заглянуть
+    внутрь безопасно."""
+    units = directory()
+    # Название звучит не сразу за объявлением, а в напутствии, которым
+    # разбор и закрывают: вперёд на две фразы, как ищет follow, его не
+    # достать. Ровно так потерялся доклад Калмыкии на записи 03.09.
+    blocks = [
+        Block("ведущий", "Переходим к первому вопросу повестки.", 0, 10),
+        Block("ведущий", "Следующий филиал.", 10, 20),
+        Block("докладчик", "План выполнен. Отставаний нет. Техника закуплена.", 20, 120),
+        Block("ведущий", "Принимается. Успехов Заречному филиалу.", 120, 140),
+    ]
+    assert at(units.follow(blocks), 60) == ""
+    assert at(marks_by_content(blocks, units), 60) == "Заречный филиал"
+
+
+def test_a_general_report_gets_no_unit():
+    """Названо несколько — это обзор, где перечисляют всех подряд, и своего
+    направления у него нет. Неверный адресат хуже пустого."""
+    units = directory()
+    blocks = [
+        Block("ведущий", "Переходим к первому вопросу повестки.", 0, 10),
+        Block("ведущий", "Следующий вопрос.", 10, 20),
+        Block("докладчик", "Северный филиал и Заречный филиал идут по плану.", 20, 120),
+    ]
+    assert at(marks_by_content(blocks, units), 60) == ""

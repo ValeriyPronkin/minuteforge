@@ -35,7 +35,7 @@ from .config import Settings
 from . import dates
 from .directory import read_directory, at as unit_at
 from .journal import Journal
-from .notes import Note, split_into_reports, take_notes
+from .notes import Note, marks_by_content, split_into_reports, take_notes
 from .vocabulary import read_vocabulary
 from .llm import LLMClient, same_model
 from .people import Person
@@ -379,7 +379,11 @@ def protocol_from_transcript(
     }
     if hosts:
         logger.info("Слово передают голосом: {}", ", ".join(sorted(hosts)))
-    marks = units.follow(for_model, hosts=hosts)
+    # Разметка уточняется содержанием отрезков — тем же способом, каким
+    # собирается «Отметили». Иначе две половины документа расходятся: там
+    # доклад приписан Калмыкии, здесь поручения из того же куска уходят в
+    # «Требуют уточнения».
+    marks = marks_by_content(for_model, units, hosts=hosts)
 
     # «Отметили» собирается до «Решили» и той же моделью, что выписывает
     # поручения: модели меняются в видеопамяти один раз за прогон, и

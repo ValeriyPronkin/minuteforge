@@ -27,6 +27,7 @@ from .blocks import (
     consolidate,
     drop_soundcheck,
     rename_speakers,
+    within,
 )
 from .checks import Suspicion, suspicious
 from .chunking import estimate_tokens, split_into_chunks, split_into_windows
@@ -34,6 +35,7 @@ from .config import Settings
 from . import dates
 from .directory import read_directory, at as unit_at
 from .journal import Journal
+from .notes import Note, split_into_reports, take_notes
 from .vocabulary import read_vocabulary
 from .llm import LLMClient, same_model
 from .people import Person
@@ -44,6 +46,7 @@ from .tasks import (
     extract_tasks,
     use_words,
     most_addressed,
+    same_person,
     worth_showing,
 )
 from .transcribe import (
@@ -280,12 +283,36 @@ def protocol_from_transcript(
     # и терять вторую половину из-за первой нельзя. Одной вежливости для
     # этого мало: «подскажите, пожалуйста, Калмыкию слышно?» — перекличка,
     # и в протоколе она стояла пунктом «Подключить Республику Калмыкию».
+    # Отрезок записи, на котором идёт совещание. Задаёт его человек: правило
+    # переклички берёт реплику по словам, а «Амурская область.» в проверке
+    # связи не отличается от передачи слова ни одним словом — отличается
+    # только местом в записи.
+    for_model = blocks
+    if settings.meeting_from_min is not None or settings.meeting_to_min is not None:
+        for_model, outside = within(
+            blocks,
+            since=(
+                settings.meeting_from_min * 60
+                if settings.meeting_from_min is not None else None
+            ),
+            until=(
+                settings.meeting_to_min * 60
+                if settings.meeting_to_min is not None else None
+            ),
+        )
+        if outside:
+            logger.info(
+                "Вне отрезка совещания пропущено: {} реплик из {}",
+                outside, len(blocks),
+            )
+
+    counted = len(for_model)
     for_model, skipped = (
-        drop_soundcheck(blocks, keep=asks_for_work)
-        if settings.drop_soundcheck else (blocks, 0)
+        drop_soundcheck(for_model, keep=asks_for_work)
+        if settings.drop_soundcheck else (for_model, 0)
     )
     if skipped:
-        logger.info("Перекличка пропущена: {} реплик из {}", skipped, len(blocks))
+        logger.info("Перекличка пропущена: {} реплик из {}", skipped, counted)
 
     if settings.extract_by_phrase:
         # Модель читает не совещание, а места, где поручение слышно. Кусок в
@@ -336,6 +363,48 @@ def protocol_from_transcript(
         checker = LLMClient(replace(settings, llm_model=settings.llm_verify_model))
         logger.info("Проверять поручения будет {}", settings.llm_verify_model)
 
+    # Чей вопрос разбирали. Считается по всей стенограмме, а не по окну:
+    # направление объявляют один раз, а поручают потом четверть часа.
+    # Слово передаёт тот, кто ведёт. Голоса ведущих справочник находит сам —
+    # по обороту перехода, — но председателя стоит назвать: он ведёт по
+    # должности, даже если ни разу не сказал «переходим к». Берётся и
+    # указанный в настройках, и вычисленный по обращениям: первого может не
+    # быть, второй бывает написан не так, как подписан голос.
+    hosts = {
+        block.speaker for block in for_model
+        if block.speaker and (
+            (meeting.chair and same_person(block.speaker, meeting.chair))
+            or (chair and same_person(block.speaker, chair))
+        )
+    }
+    if hosts:
+        logger.info("Слово передают голосом: {}", ", ".join(sorted(hosts)))
+    marks = units.follow(for_model, hosts=hosts)
+
+    # «Отметили» собирается до «Решили» и той же моделью, что выписывает
+    # поручения: модели меняются в видеопамяти один раз за прогон, и
+    # вклиниваться между выпиской и проверкой нельзя.
+    notes: list[Note] = []
+    if settings.take_notes and units:
+        reports, outside = split_into_reports(for_model, units, hosts=hosts)
+        logger.info(
+            "Докладов по направлениям: {}; вне разбора осталось {} реплик — "
+            "повестка, перекличка и общие доклады",
+            len(reports), len(outside.blocks),
+        )
+        notes = take_notes(
+            reports, client,
+            budget=settings.notes_chunk_tokens,
+            json_mode=settings.llm_json_mode,
+            extra=settings.notes_prompt_extra,
+            progress=progress,
+        )
+    elif settings.take_notes:
+        logger.warning(
+            "Раздел «Отметили» не собран: без справочника направлений "
+            "доклады не на что разложить."
+        )
+
     record = Journal()
     tasks = extract_tasks(
         chunks, client, progress=progress, answers=answers,
@@ -344,9 +413,6 @@ def protocol_from_transcript(
     )
     logger.info("Найдено поручений: {}", len(tasks))
 
-    # Чей вопрос разбирали. Считается по всей стенограмме, а не по окну:
-    # направление объявляют один раз, а поручают потом четверть часа.
-    marks = units.follow(for_model)
     # Поручению, данному всему залу, направление не приписывается: «обращайтесь
     # в головную организацию — все регионы — Пермский край» сужает адресата
     # до одного субъекта, хотя сказано было всем.
@@ -373,6 +439,7 @@ def protocol_from_transcript(
         attendees=meeting.attendees,
         people=meeting.people,
         answers=answers,
+        notes=notes,
         unit_label=units.label,
         addressees=units.addressees(),
         decision_formula=settings.decision_formula,

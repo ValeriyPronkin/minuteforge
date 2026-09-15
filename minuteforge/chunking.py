@@ -194,7 +194,7 @@ def _window(
         if parts and parts[-1].speaker == block.speaker and _same_block(flat, index):
             parts[-1] = _grow(parts[-1], block, sentences, position)
             continue
-        parts.append(_piece(block, sentences, position, position))
+        parts.append(piece(block, sentences, position, position))
     return parts
 
 
@@ -205,7 +205,7 @@ def _same_block(flat: list[tuple[Block, list[str], int]], index: int) -> bool:
 
 def _grow(part: Block, block: Block, sentences: list[str], position: int) -> Block:
     """Дописывает фразу к части окна, сдвигая её конец."""
-    grown = _piece(block, sentences, position, position)
+    grown = piece(block, sentences, position, position)
     return Block(
         part.speaker,
         f"{part.text} {grown.text}".strip(),
@@ -214,8 +214,12 @@ def _grow(part: Block, block: Block, sentences: list[str], position: int) -> Blo
     )
 
 
-def _piece(block: Block, sentences: list[str], first: int, last: int) -> Block:
+def piece(block: Block, sentences: list[str], first: int, last: int) -> Block:
     """Часть реплики со своим временем.
+
+    Нужна не только нарезке: по этой же разметке раскладываются доклады по
+    направлениям, и считать время фразы двумя способами нельзя — отрезки и
+    поручения разъедутся.
 
     Время считается по доле текста — точнее нельзя, оно известно только для
     реплики целиком. Зато отметка попадает в нужную минуту десятиминутного

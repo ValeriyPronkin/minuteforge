@@ -19,6 +19,7 @@ from typing import Sequence
 from . import dates
 from .blocks import UNKNOWN, Transcript
 from .directory import DEFAULT_LABEL
+from .notes import Note
 from .people import Person, canonical, find
 from .tasks import Task
 
@@ -43,6 +44,10 @@ class Protocol:
     #: в шапке протокола нужны должности, а в поручениях — только фамилии.
     people: list[Person] = field(default_factory=list)
     tasks: list[Task] = field(default_factory=list)
+    #: Раздел «Отметили»: о чём доложили по каждому направлению. Пусто —
+    #: раздела в документе не будет: пустой заголовок хуже отсутствующего,
+    #: он выглядит потерянным содержимым.
+    notes: list[Note] = field(default_factory=list)
     transcript: Transcript | None = None
     #: Как называется графа «чей вопрос разбирали». У штаба это «Регион», у
     #: завода «Площадка», у холдинга «Общество» — форму разбора приносит
@@ -147,6 +152,10 @@ class Protocol:
             )
             lines.append(f"**Распознано:** модель {self.transcript.model}{hinted}  ")
         lines.append("")
+
+        if self.notes:
+            lines.extend(_note_lines(self.notes, self.unit_label))
+            lines.append("")
 
         lines.append("## Поручения")
         lines.append("")
@@ -284,6 +293,7 @@ def build_protocol(
     secretary: str = "",
     number: str = "",
     answers: Sequence[str] | None = None,
+    notes: Sequence[Note] | None = None,
     unit_label: str = DEFAULT_LABEL,
     addressees: dict[str, str] | None = None,
     decision_formula: str = "",
@@ -334,6 +344,7 @@ def build_protocol(
         attendees=list(attendees or []),
         people=list(people or []),
         tasks=list(tasks),
+        notes=list(notes or []),
         transcript=transcript,
         answers=list(answers or []),
         unit_label=unit_label,
@@ -470,6 +481,29 @@ def _on_date(task: Task) -> str:
     контроль, нужна дата.
     """
     return task.due_date or task.due
+
+
+def _note_lines(notes: Sequence[Note], label: str = DEFAULT_LABEL) -> list[str]:
+    """Раздел «Отметили» — о чём доложили, по направлениям.
+
+    Пункт — доклад целиком, тезисы под ним подпунктами. Так этот раздел и
+    устроен в подписанном протоколе: «Информацию такого-то о том-то, о
+    том-то, а также о том-то».
+
+    Канцелярский оборот инструмент не дописывает. Кто доложил — вопрос
+    имени, а имя у голоса есть не всегда; о чём доложили — вопрос записи, и
+    вот его инструмент и отвечает. Форму наводит секретарь, и делает он это
+    по материалу, а не по пустому месту.
+    """
+    lines = ["## Отметили", ""]
+    for number, note in enumerate(notes, 1):
+        head = f"{number}. **{note.unit or label}**"
+        if note.at is not None:
+            head += f" — {_clock(note.at)}"
+        lines.append(head)
+        lines.extend(f"    - {thesis}" for thesis in note.theses)
+        lines.append("")
+    return lines[:-1] if lines[-1] == "" else lines
 
 
 def _task_lines(tasks: Sequence[Task]) -> list[str]:

@@ -384,6 +384,7 @@ def protocol_from_transcript(
     # «Отметили» собирается до «Решили» и той же моделью, что выписывает
     # поручения: модели меняются в видеопамяти один раз за прогон, и
     # вклиниваться между выпиской и проверкой нельзя.
+    record = Journal()
     notes: list[Note] = []
     if settings.take_notes and units:
         reports, outside = split_into_reports(for_model, units, hosts=hosts)
@@ -398,6 +399,7 @@ def protocol_from_transcript(
             json_mode=settings.llm_json_mode,
             extra=settings.notes_prompt_extra,
             progress=progress,
+            journal=record,
         )
     elif settings.take_notes:
         logger.warning(
@@ -405,7 +407,6 @@ def protocol_from_transcript(
             "доклады не на что разложить."
         )
 
-    record = Journal()
     tasks = extract_tasks(
         chunks, client, progress=progress, answers=answers,
         corpus=named.as_text(), chair=chair, journal=record, directory=units,

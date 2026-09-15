@@ -11,6 +11,11 @@
 именно ушло и с какой формулировкой. И отдельно — окна, из которых модель не
 вернула ничего: это единственное место, где видно, что она пропустила.
 
+То же и с разделом «Отметили». Там отсев идёт правилами, без модели, и без
+записки его не видно вовсе: направление просто не попадает в документ, а
+почему — потому ли, что доклада не было, или потому, что все тезисы сочтены
+выдумкой, — по протоколу не отличить.
+
 Файл ложится рядом с протоколом. Он не документ и не для рассылки: это
 рабочая записка для того, кто настраивает разбор.
 """
@@ -56,12 +61,24 @@ class Step:
     why: str = ""
 
 
+@dataclass
+class Said:
+    """Один тезис раздела «Отметили» и что с ним стало."""
+
+    unit: str
+    at: float | None
+    text: str
+    #: Чем отсеян. Пусто — уцелел и стоит в документе.
+    why: str = ""
+
+
 class Journal:
     """Что происходило с поручениями по дороге в протокол."""
 
     def __init__(self) -> None:
         self.windows: list[Window] = []
         self.steps: list[Step] = []
+        self.theses: list[Said] = []
 
     # ------------------------------------------------------------ запись
     def window(self, chunk, answer: str, found: int) -> None:
@@ -78,6 +95,10 @@ class Journal:
             answer=answer or "",
             found=found,
         ))
+
+    def thesis(self, unit: str, at: float | None, text: str, why: str = "") -> None:
+        """Тезис, предложенный моделью, и чем он отсеян. Пусто — уцелел."""
+        self.theses.append(Said(unit=unit, at=at, text=text, why=why))
 
     def step(self, title: str, before: Sequence, after: Sequence, why: str = "") -> None:
         """Стадия разбора. Что ушло и что пришло, считается сравнением.
@@ -109,11 +130,16 @@ class Journal:
         """
         return [window for window in self.windows if not window.found]
 
+    @property
+    def dropped_theses(self) -> list[Said]:
+        """Тезисы, не попавшие в документ."""
+        return [said for said in self.theses if said.why]
+
     def as_markdown(self) -> str:
-        lines = ["# Разбор поручений", ""]
+        lines = ["# Разбор протокола", ""]
         lines.append(
-            "Рабочая записка, не документ. Показывает, что происходило со "
-            "списком поручений между стенограммой и протоколом."
+            "Рабочая записка, не документ. Показывает, что происходило между "
+            "стенограммой и протоколом: с поручениями и с отмеченным."
         )
         lines.append("")
 
@@ -159,6 +185,9 @@ class Journal:
                 lines.append(f"- **стало** {_clock(task.at)} {task.what}")
             lines.append("")
 
+        if self.theses:
+            lines.extend(_notes_lines(self.theses))
+
         if self.silent_windows:
             lines.extend([
                 "## Окна, из которых ничего не вышло",
@@ -178,6 +207,52 @@ class Journal:
                 lines.append("")
 
         return "\n".join(lines).rstrip() + "\n"
+
+
+def _notes_lines(theses: Sequence[Said]) -> list[str]:
+    """Раздел записки про «Отметили»: что предложено и что отсеяно.
+
+    Отсев здесь идёт правилами, и по документу его не видно: направления
+    просто нет. Поэтому показывается всё и с причиной — иначе следующая
+    правка порогов будет догадкой.
+    """
+    kept = [said for said in theses if not said.why]
+    gone = [said for said in theses if said.why]
+    lines = [
+        "## Отмеченное",
+        "",
+        f"Модель предложила **{_plural(len(theses), 'тезис', 'тезиса', 'тезисов')}**, "
+        f"в документ вошло **{len(kept)}**, отсеяно **{len(gone)}**.",
+        "",
+    ]
+    if gone:
+        why: dict[str, int] = {}
+        for said in gone:
+            # Причина с числом внутри — «в куске нашлось 45 %» — своя у
+            # каждого тезиса; для сводки берётся её начало до двоеточия.
+            why[said.why.split(":")[0]] = why.get(said.why.split(":")[0], 0) + 1
+        lines.extend(["| Чем отсеян | Сколько |", "|---|---|"])
+        lines.extend(
+            f"| {reason} | {count} |"
+            for reason, count in sorted(why.items(), key=lambda it: -it[1])
+        )
+        lines.append("")
+
+    # По направлениям: разбирают по одному, и читать записку будут так же.
+    order: list[str] = []
+    for said in theses:
+        if said.unit not in order:
+            order.append(said.unit)
+    for unit in order:
+        own = [said for said in theses if said.unit == unit]
+        survived = sum(1 for said in own if not said.why)
+        lines.append(f"### {unit} — {survived} из {len(own)}")
+        lines.append("")
+        for said in own:
+            mark = f"**отсеян** ({said.why}) " if said.why else ""
+            lines.append(f"- {mark}{_clock(said.at)} {_short(said.text, 300)}")
+        lines.append("")
+    return lines
 
 
 #: Уже заведённая запись в файл. Интерфейс перечитывает свой сценарий на
@@ -224,6 +299,16 @@ def setup_file_log(log_dir: str | Path, level: str = "INFO") -> Path | None:
         # но не обязателен, и падать из-за него нельзя.
         print(f"Журнал не ведётся: {exc}", file=sys.stderr)
         return None
+
+
+def _plural(count: int, one: str, few: str, many: str) -> str:
+    """«1 тезис», «3 тезиса», «11 тезисов» — иначе записка читается как черновик."""
+    if count % 100 // 10 == 1:
+        return f"{count} {many}"
+    last = count % 10
+    if last == 1:
+        return f"{count} {one}"
+    return f"{count} {few}" if 2 <= last <= 4 else f"{count} {many}"
 
 
 def _short(text: str, limit: int = QUOTE_LIMIT) -> str:

@@ -63,7 +63,7 @@ def test_a_window_remembers_when_it_was_said():
 
 
 def test_an_empty_journal_is_still_readable():
-    assert "Разбор поручений" in Journal().as_markdown()
+    assert "Разбор протокола" in Journal().as_markdown()
 
 
 @pytest.fixture
@@ -104,3 +104,26 @@ def test_an_unwritable_folder_does_not_stop_the_work(tmp_path, fresh_log, capsys
 
     assert setup_file_log(busy) is None
     assert "Журнал не ведётся" in capsys.readouterr().err
+
+
+def test_the_dropped_theses_are_written_down_with_the_reason():
+    """Отсев в разделе «Отметили» идёт правилами, и по документу его не
+    видно: направления просто нет. Записка — единственное место, где
+    отличить «доклада не было» от «все тезисы сочтены выдумкой»."""
+    record = Journal()
+    record.thesis("Северный филиал", 30.0, "Готовность цеха 93,5 процента.")
+    record.thesis("Северный филиал", 30.0, "Даты выполнения", "короче обрывка")
+    record.thesis("Заречный филиал", 330.0, "Отставание полтора года.",
+                  "в куске найдено: 40% слов из 5")
+
+    assert len(record.dropped_theses) == 2
+    text = record.as_markdown()
+    assert "## Отмеченное" in text
+    assert "Северный филиал — 1 из 2" in text
+    assert "Заречный филиал — 0 из 1" in text
+    assert "в куске найдено: 40% слов из 5" in text
+
+
+def test_without_theses_there_is_no_section_about_them():
+    """Пустой заголовок в записке — такой же шум, как в протоколе."""
+    assert "## Отмеченное" not in Journal().as_markdown()

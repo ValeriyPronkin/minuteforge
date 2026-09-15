@@ -9,8 +9,8 @@ from minuteforge.notes import (
     Note,
     Report,
     _read,
+    _why_dropped,
     _without_repeats,
-    _worth_keeping,
     split_into_reports,
     take_notes,
 )
@@ -110,22 +110,57 @@ def test_an_order_is_not_a_note():
     """Требование — это «Решили», а не «Отметили». Пункт, попавший не в свой
     раздел, хуже пропущенного: его исполнят дважды или не исполнят вовсе."""
     said_here = "Подготовьте план работ и представьте его до пятницы."
-    assert not _worth_keeping(said_here, f"докладчик: {said_here}")
+    assert "Решили" in _why_dropped(said_here, f"докладчик: {said_here}")
+
+
+def test_a_demand_named_by_a_noun_is_still_a_demand():
+    """«Необходимость провести мониторинг» — тот же приказ, только
+    существительным, и правило про повелительное наклонение его не берёт."""
+    said_here = "Необходимость провести мониторинг курортного региона."
+    assert "Решили" in _why_dropped(said_here, f"докладчик: {said_here}")
+
+
+def test_a_heading_from_a_slide_is_not_a_thesis():
+    """Докладывают по слайду, и модель пересказывает заголовки граф."""
+    source = "докладчик: Даты выполнения. Показатели мощности. Проценты."
+    assert _why_dropped("Даты выполнения", source)
+    assert _why_dropped("Показатели мощности", source)
+
+
+def test_a_short_thesis_is_still_a_thesis():
+    """Отсекается заведомый обрывок, а не всё короткое: «Фотоотчёт отправлен
+    сегодня» короче иного заголовка графы."""
+    source = "докладчик: Фотоотчет отправлен сегодня, как договаривались."
+    assert not _why_dropped("Фотоотчет отправлен сегодня.", source)
+
+
+def test_several_sentences_become_several_theses():
+    """Модели сказано «одно предложение», а она складывает в один тезис три.
+    Порознь их и читать легче, и проверять."""
+    assert _read(said(
+        "Готовность цеха 93,5 процента. Ввод в декабре."
+    )) == ["Готовность цеха 93,5 процента.", "Ввод в декабре."]
+
+
+def test_the_reason_for_dropping_is_written_down():
+    """Отсев здесь идёт правилами, и по документу его не видно: направления
+    просто нет. Причина уходит в записку, и по ней настраивают пороги."""
+    source = "докладчик: Готовность цеха 93,5 процента."
+    why = _why_dropped("Отставание от карты составляет полтора года.", source)
+    assert "в куске найдено" in why
 
 
 def test_an_invented_thesis_is_dropped():
     """Модель дописывает подробности, которых в куске не было."""
     source = "докладчик: Готовность цеха 93,5 процента. Ввод в декабре."
-    assert _worth_keeping("Готовность цеха 93,5 процента.", source)
-    assert not _worth_keeping(
-        "Отставание от дорожной карты составляет полтора года.", source
-    )
+    assert not _why_dropped("Готовность цеха 93,5 процента.", source)
+    assert _why_dropped("Отставание от дорожной карты составляет полтора года.", source)
 
 
 def test_an_answer_in_another_language_is_dropped():
     """Мелкая модель срывается на английский, и это видно только проверкой."""
     source = "докладчик: Готовность цеха 93,5 процента."
-    assert not _worth_keeping("The workshop is 93,5 percent ready.", source)
+    assert _why_dropped("The workshop is 93,5 percent ready.", source) == "не по-русски"
 
 
 def test_the_speaker_label_is_not_part_of_the_thesis():

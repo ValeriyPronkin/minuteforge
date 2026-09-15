@@ -56,6 +56,16 @@ FROM_THE_CHUNK = 0.7
 #: иногда пересказывает кусок целиком.
 LONGEST = 400
 
+#: Короче этого — не тезис, а обрывок: «Даты выполнения», «Показатели
+#: мощности», «У нас есть связь». Модель так пересказывает слайд, с которого
+#: докладывают, — заголовками граф, а не тем, что в них стоит.
+#:
+#: Порог низкий нарочно. Короткий тезис бывает и настоящим — «Фотоотчёт
+#: отправлен сегодня», — а отличить его от заголовка длиной не выходит:
+#: «Проценты исполнения мероприятий на сегодня» длиннее обоих. Поэтому здесь
+#: отсекается только заведомое, а остальное правится указаниями модели.
+SHORTEST = 25
+
 
 @dataclass
 class Report:
@@ -248,6 +258,8 @@ NOTES_SYSTEM = """Ты — секретарь совещания. Тебе да�
   «усилить», «в срок до»: это другой раздел протокола;
 — не добавляй того, чего в куске нет: ни оценок, ни выводов, ни причин;
 — не пересказывай перекличку, приветствия и благодарности;
+— тезис должен быть законченным утверждением, а не заголовком графы:
+  «Готовность цеха 93,5 %» — да, «Показатели мощности» — нет;
 — не больше трёх тезисов; доложено не о чем — верни пустой список.
 
 Ответь строго так, без единого слова вокруг:
@@ -274,6 +286,7 @@ def take_notes(
     json_mode: bool = True,
     extra: str = "",
     progress: Progress | None = None,
+    journal: object | None = None,
 ) -> list[Note]:
     """Пересказывает каждый доклад тезисами.
 
@@ -300,7 +313,10 @@ def take_notes(
         for chunk in split_into_chunks(
             found.blocks, max_tokens=budget, overlap_blocks=0,
         ):
-            theses.extend(_ask(client, system, chunk, json_mode=json_mode))
+            theses.extend(_ask(
+                client, system, chunk,
+                json_mode=json_mode, unit=found.unit, journal=journal,
+            ))
         note = Note(
             unit=found.unit,
             theses=_without_repeats(theses),
@@ -319,7 +335,13 @@ def take_notes(
 
 
 def _ask(
-    client: LLMClient, system: str, chunk: Chunk, *, json_mode: bool,
+    client: LLMClient,
+    system: str,
+    chunk: Chunk,
+    *,
+    json_mode: bool,
+    unit: str = "",
+    journal: object | None = None,
 ) -> list[str]:
     """Тезисы по одной части доклада — те, что выдержали проверку."""
     try:
@@ -331,10 +353,18 @@ def _ask(
     except LLMError as exc:
         logger.warning("Часть доклада не пересказана: {}", exc)
         return []
-    return [
-        thesis for thesis in _read(reply.text)
-        if _worth_keeping(thesis, chunk.text)
-    ]
+    at = min(
+        (b.start for b in getattr(chunk, "blocks", []) if b.start is not None),
+        default=None,
+    )
+    kept: list[str] = []
+    for thesis in _read(reply.text):
+        why = _why_dropped(thesis, chunk.text)
+        if journal is not None:
+            journal.thesis(unit, at, thesis, why)
+        if not why:
+            kept.append(thesis)
+    return kept
 
 
 def _read(answer: str) -> list[str]:
@@ -357,8 +387,15 @@ def _read(answer: str) -> list[str]:
     theses = body.get("theses") if isinstance(body, dict) else None
     if not isinstance(theses, list):
         return []
+    # Каждое предложение — свой пункт. Модели сказано «одно предложение»,
+    # но она складывает в один тезис три, и в документе они стоят одной
+    # строкой на двести знаков. Порознь их и читать легче, и проверять:
+    # выдуманное предложение внутри верного тезиса отсеется само.
     return [
-        clean for clean in (_without_speaker(str(item)) for item in theses) if clean
+        part
+        for item in theses
+        for part in _sentences(_without_speaker(str(item)))
+        if part.strip()
     ]
 
 
@@ -381,27 +418,51 @@ def _without_speaker(thesis: str) -> str:
     return _SPEAKER_PREFIX.sub("", (thesis or "").strip()).strip()
 
 
-def _worth_keeping(thesis: str, source: str) -> bool:
-    """Годится ли тезис для документа.
+def _why_dropped(thesis: str, source: str) -> str:
+    """Чем тезис не годится для документа. Пусто — годится.
+
+    Причина, а не «да/нет», и это важно: отсев здесь идёт правилами, и по
+    документу его не видно — направление просто не попадает в протокол.
+    Причина уходит в записку разбора, и по ней настраивают пороги.
 
     Проверки те же, какими держится выписка поручений, и по той же причине:
     мелкая модель отвечает не на том языке, сочиняет подробности, которых в
     куске не было, и путает разделы протокола.
     """
-    if len(thesis) > LONGEST or len(thesis) < 10:
-        return False
+    # Язык проверяется первым не из педантизма: английский ответ это сбой
+    # модели, а не плохой тезис, и в записке их надо различать. По длине он
+    # сошёл бы за обрывок, и сбой остался бы незамеченным.
     if not is_russian(thesis):
-        return False
-    if is_directive(thesis):
+        return "не по-русски"
+    if len(thesis) < SHORTEST:
+        return "короче обрывка"
+    if len(thesis) > LONGEST:
+        return "длиннее пункта"
+    if is_directive(thesis) or _demanded(thesis):
         # Требование — это «Решили», а не «Отметили». Пункт, попавший не в
         # свой раздел, хуже пропущенного: его исполнят дважды или не
         # исполнят вовсе.
-        return False
+        return "звучит требованием — это «Решили»"
     words = _significant(thesis)
     if not words:
-        return False
-    heard = _significant(source)
-    return len(words & heard) / len(words) >= FROM_THE_CHUNK
+        return "нет значащих слов"
+    share = len(words & _significant(source)) / len(words)
+    if share < FROM_THE_CHUNK:
+        return f"в куске найдено: {share:.0%} слов из {len(words)}"
+    return ""
+
+
+#: Чем требование притворяется существительным: «Необходимость провести
+#: мониторинг», «Требуется подтвердить сроки». Глагола в повелительном
+#: наклонении здесь нет, и правило :func:`is_directive` такое не берёт — а
+#: это всё равно «Решили», а не «Отметили».
+_DEMAND = ("необходимость ", "необходимо ", "требуется ", "нужно ", "следует ")
+
+
+def _demanded(thesis: str) -> bool:
+    """Требование, названное существительным, — тоже требование."""
+    lowered = (thesis or "").strip().lower()
+    return any(lowered.startswith(word) for word in _DEMAND)
 
 
 def _without_repeats(theses: Sequence[str]) -> list[str]:

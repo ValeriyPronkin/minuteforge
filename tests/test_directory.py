@@ -6,8 +6,10 @@ from minuteforge.directory import (
     EMPTY,
     Directory,
     Entry,
+    _phrases,
     at,
     read_directory,
+    who_leads,
 )
 
 
@@ -173,6 +175,90 @@ def test_an_address_is_told_apart_from_a_mention():
         "Восточная площадка"
     )
     assert units.starts_with("Отмечу, что Заречный филиал выполнил план") == ""
+
+
+def test_a_call_to_report_is_an_announcement():
+    """Слово передают окликом: назвали — и человек начинает доклад.
+
+    Оборота «переходим к» при этом не звучит вовсе, а разбор начинается.
+    """
+    units = directory()
+    assert units.called_on("Северный филиал.") == "Северный филиал"
+    assert units.called_on("Заречный филиал, пожалуйста.") == "Заречный филиал"
+    assert units.called_on("Восточная площадка, прошу.") == "Восточная площадка"
+
+
+def test_a_call_is_told_apart_from_talking_about_a_unit():
+    """После названия не должно остаться ничего, кроме слова вызова.
+
+    Иначе окликом станет и перекличка, и перечисление в чужом докладе, а
+    разбор уйдёт к тому, кто своей очереди не дождался.
+    """
+    units = directory()
+    assert units.called_on("Северный филиал на связи.") == ""
+    assert units.called_on("Северный филиал и Заречный филиал.") == ""
+    assert units.called_on("Заречному филиалу требуется новая смета.") == ""
+    assert units.called_on("Восточная площадка слышите, да?") == ""
+
+
+def test_a_call_starts_the_round():
+    """Оклик двигает разбор так же, как объявление, и название в нём уже
+    названо — вперёд по соседним фразам его искать не нужно."""
+    units = directory()
+    blocks = [
+        Block("ведущий", "Переходим к первому вопросу повестки.", 0, 5),
+        Block("ведущий", "Северный филиал, пожалуйста.", 5, 10),
+        Block("SPEAKER_01", "План выполнен, отставаний нет.", 10, 60),
+        Block("ведущий", "Заречный филиал.", 60, 70),
+        Block("SPEAKER_02", "У нас закуплено двадцать единиц техники.", 70, 120),
+    ]
+    marks = units.follow(blocks)
+    assert [name for _, name in marks][-2:] == ["Северный филиал", "Заречный филиал"]
+    assert at(marks, 30) == "Северный филиал"
+    assert at(marks, 100) == "Заречный филиал"
+
+
+def test_a_call_from_the_floor_does_not_start_the_round():
+    """На перекличке тем же окликом отзываются сами участники.
+
+    «Северный филиал.» с тридцатой минуты — это ответ на проверку связи, а
+    не передача слова, и по одной фразе они неразличимы. Различает голос:
+    слово передаёт тот, кто ведёт.
+    """
+    units = directory()
+    blocks = [
+        Block("ведущий", "Коллеги, начнём проверку связи.", 0, 5),
+        Block("SPEAKER_07", "Северный филиал.", 5, 10),
+        Block("SPEAKER_08", "Заречный филиал на связи.", 10, 15),
+        Block("ведущий", "Переходим к первому вопросу повестки.", 15, 20),
+    ]
+    assert [name for _, name in units.follow(blocks)] == [""]
+
+
+def test_the_chair_leads_even_without_a_formula():
+    """Председатель ведёт по должности, а не по тому, сказал ли он
+    «переходим к». Известен он — его оклик засчитывается."""
+    units = directory()
+    blocks = [
+        Block("Петров", "Северный филиал, пожалуйста.", 0, 10),
+        Block("SPEAKER_01", "План выполнен, отставаний нет.", 10, 60),
+    ]
+    assert units.follow(blocks) == []
+    assert [name for _, name in units.follow(blocks, hosts=["Петров"])] == [
+        "Северный филиал"
+    ]
+
+
+def test_who_leads_finds_the_hosts_and_not_the_floor():
+    """Ведущих несколько: общую часть ведёт председатель, разделы — свои
+    докладчики. Искать одного было бы ошибкой."""
+    units = directory()
+    blocks = [
+        Block("ведущий", "Переходим ко второму вопросу повестки.", 0, 10),
+        Block("докладчик", "Следующий филиал Заречный.", 10, 20),
+        Block("SPEAKER_07", "Северный филиал.", 20, 25),
+    ]
+    assert who_leads(_phrases(blocks), units) == {"ведущий", "докладчик"}
 
 
 def test_without_a_directory_nothing_is_invented():

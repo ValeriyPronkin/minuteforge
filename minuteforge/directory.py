@@ -112,6 +112,25 @@ _ADDRESS_PREFIX = re.compile(
     re.IGNORECASE,
 )
 
+#: Из чего ещё состоит название, кроме узнанной основы: «Еврейская
+#: автономная область», «Ямало-Ненецкий автономный округ», «Первая площадка».
+#: Нужно, чтобы отличить оклик от разговора: после названия должно не остаться
+#: ничего, и эти слова частью «остального» не считаются.
+_NAME_WORDS = _ABOUT_A_UNIT + ("автономн", "народн")
+
+#: Чем оканчивают оклик, вызывая к докладу. Список закрытый и короткий: всё,
+#: что сверх него, — уже разговор о направлении, а не вызов его. «Кировская
+#: область на связи» — перекличка, «Новосибирская область и Саратовская
+#: область» — перечисление в чужом докладе, и ни то ни другое разбора не
+#: начинает.
+_CALL_WORDS = (
+    "пожалуйста", "прошу", "слушаем", "слушаю", "доложите",
+    "вам слово", "начинайте", "включайтесь",
+)
+
+#: Остаток слова, основу которого узнал справочник, и служебные хвосты.
+_WORD_TAIL = re.compile(r"^\w*")
+
 _SENTENCES = re.compile(r"(?<=[.!?…])\s+")
 
 #: Как называется графа, пока не сказано иначе. Слово намеренно никакое:
@@ -173,6 +192,21 @@ class Directory:
                 best = (found.start(), name)
         return best[1]
 
+    def find_all(self, text: str) -> list[str]:
+        """Все направления, названные в тексте, по порядку справочника.
+
+        Не :meth:`find`: тот отдаёт первое, а в одной фразе называют и три
+        сразу — «рассмотреть три региона: Иркутскую, Брянскую и Курганскую».
+        По тому, сколько названо, отличается доклад по кругу от общего: в
+        своём говорят об одном, в обзорном перечисляют всех подряд.
+        """
+        lowered = (text or "").lower()
+        found: list[str] = []
+        for name, pattern in self._compiled:
+            if name not in found and pattern.search(lowered):
+                found.append(name)
+        return found
+
     def starts_with(self, text: str) -> str:
         """Названо ли направление в самом начале фразы.
 
@@ -185,6 +219,31 @@ class Directory:
         for name, pattern in self._compiled:
             found = pattern.search(head)
             if found and found.start() == 0:
+                return name
+        return ""
+
+    def called_on(self, text: str) -> str:
+        """Вызывают ли этой фразой направление к докладу.
+
+        Разбор по кругу объявляют не только оборотом. Чаще его объявляют
+        окликом: «Саратовская область.», «Еврейская автономная область,
+        пожалуйста.» — назвали, и человек начинает доклад. На записи 27.08
+        так передают слово десять раз из тринадцати, а оборота «переходим к»
+        не звучит вовсе, и разбор для десяти регионов не начинался.
+
+        От простого упоминания оклик отличается тем, что после названия не
+        остаётся ничего, кроме слова вызова. «Кировская область на связи» —
+        перекличка, «Новосибирская область и Саратовская область» —
+        перечисление в чужом докладе, «Ульяновску требуется новая схема» —
+        разговор. Проверка нарочно строгая: неверный адресат хуже пустого,
+        а оклик короток и ни на что другое не похож.
+        """
+        head = _ADDRESS_PREFIX.sub("", (text or "").strip()).lower()
+        for name, pattern in self._compiled:
+            found = pattern.search(head)
+            if not found or found.start() != 0:
+                continue
+            if _only_a_call(head[found.end():]):
                 return name
         return ""
 
@@ -201,24 +260,42 @@ class Directory:
             if entry.addressee
         }
 
-    def follow(self, blocks: Sequence[object]) -> list[tuple[float, str]]:
+    def follow(
+        self,
+        blocks: Sequence[object],
+        *,
+        hosts: Iterable[str] = (),
+    ) -> list[tuple[float, str]]:
         """Когда какое направление начали разбирать.
 
         Возвращает переходы по времени записи: секунда и название. Разбор
         считается идущим до следующего перехода — так совещание и устроено,
         один за другим.
+
+        :param hosts: чьим голосом ещё ведут, кроме тех, кого слышно по
+            обороту перехода. Сюда идёт председатель, если он известен: он
+            ведёт по должности, даже когда ни разу не сказал «переходим к».
         """
         if not self.entries:
             # Пустой справочник не размечает ничего: отметки «не разобрать»
             # без единого названия — только шум в журнале.
             return []
         flat = _phrases(blocks)
+        leading = set(hosts) | who_leads(flat, self)
         marks: list[tuple[float, str]] = []
-        for position, (start, sentence) in enumerate(flat):
-            announced = is_announcement(sentence, self)
+        for position, (start, sentence, voice) in enumerate(flat):
+            # Оклик — такое же объявление, как оборот, и название в нём уже
+            # названо: искать его вперёд по соседним фразам не нужно. Но
+            # засчитывается он только ведущему: на перекличке тем же окликом
+            # отзываются сами регионы, и «Амурская область.» с тридцать
+            # первой минуты начинало разбор посреди проверки связи.
+            called = self.called_on(sentence) if voice in leading else ""
+            announced = bool(called) or is_announcement(sentence, self)
             if not announced and not is_quiet_move(sentence):
                 continue
-            if leaves_the_round(sentence):
+            if called:
+                name = called
+            elif leaves_the_round(sentence):
                 # Ушли с разбора — искать название вперёд незачем: первое
                 # найденное будет упомянуто в общей части мимоходом.
                 name = ""
@@ -238,7 +315,7 @@ class Directory:
                 marks.append((start, name))
         return marks
 
-    def _ahead(self, flat: Sequence[tuple[float, str]], position: int) -> str:
+    def _ahead(self, flat: Sequence[tuple[float, str, str]], position: int) -> str:
         """Название в ближайших фразах после объявления."""
         for step in range(1, LOOKAHEAD + 1):
             if position + step >= len(flat):
@@ -247,6 +324,32 @@ class Directory:
             if name:
                 return name
         return ""
+
+
+def who_leads(
+    flat: Sequence[tuple[float, str, str]],
+    directory: "Directory | None" = None,
+) -> set[str]:
+    """Чьим голосом ведут совещание.
+
+    Ведущим считается тот, кто хоть раз объявил переход оборотом —
+    «Переходим ко второму вопросу», «Следующий регион». Оборот ни с чем не
+    путается, и этого хватает, чтобы отделить ведущих от остальных: на обеих
+    контрольных записях так находится от трёх до четырёх голосов, а на
+    перекличке не находится ни один.
+
+    Ведущий не один, и искать одного было бы ошибкой: у штаба председатель
+    ведёт общую часть, а разделы повестки — свои докладчики, и слово внутри
+    раздела передают они.
+
+    Нужно это ровно затем, чтобы засчитывать оклик. Оборот в засчитывании не
+    нуждается: его ни с чем не спутать, кто бы его ни произнёс.
+    """
+    return {
+        voice
+        for _, sentence, voice in flat
+        if voice and is_announcement(sentence, directory)
+    }
 
 
 #: Пустой справочник: файла нет или он не задан. Разбор идёт как прежде,
@@ -360,6 +463,23 @@ def at(marks: Sequence[tuple[float, str]], seconds: float | None) -> str:
     return current
 
 
+def _only_a_call(tail: str) -> bool:
+    """Осталось ли после названия что-нибудь, кроме слова вызова.
+
+    Съедается остаток самого слова («саратовск» + «ая»), затем слова, из
+    которых состоит название целиком («автономная область»), — и то, что
+    после этого осталось, должно быть либо пустым, либо словом вызова.
+    """
+    rest = _WORD_TAIL.sub("", tail).strip(" .,!?…—–-")
+    while rest:
+        word = rest.split(maxsplit=1)[0]
+        if not any(word.startswith(stem) for stem in _NAME_WORDS):
+            break
+        parts = rest.split(maxsplit=1)
+        rest = (parts[1] if len(parts) > 1 else "").strip(" .,!?…—–-")
+    return not rest or rest in _CALL_WORDS
+
+
 def _entries(lines: Iterable[str]) -> Iterable[Entry]:
     # Списком, а не потоком: разделитель ищется по тем же строкам, что
     # потом читаются, и одноразовый итератор здесь молча дал бы пустой файл.
@@ -419,18 +539,22 @@ def _pattern(mark: str) -> re.Pattern:
     return re.compile(rf"(?<![а-яёa-z]){body}")
 
 
-def _phrases(blocks: Sequence[object]) -> list[tuple[float, str]]:
-    """Стенограмма как череда фраз со временем каждой.
+def _phrases(blocks: Sequence[object]) -> list[tuple[float, str, str]]:
+    """Стенограмма как череда фраз со временем и голосом каждой.
 
     Время считается по доле текста внутри реплики: реплика ведущего бывает в
     две минуты, и «Следующий регион» в её конце, отнесённое к её началу,
     отдавало следующему всё, что поручено в этой же реплике предыдущему.
+
+    Голос нужен затем, что слово передаёт не всякий: тем же окликом
+    «Амурская область» на перекличке отзываются сами регионы.
     """
-    flat: list[tuple[float, str]] = []
+    flat: list[tuple[float, str, str]] = []
     for block in blocks:
         start = getattr(block, "start", None)
         if start is None:
             continue
+        speaker = getattr(block, "speaker", "") or ""
         text = getattr(block, "text", "") or ""
         offset = 0
         for sentence in _SENTENCES.split(text):
@@ -439,7 +563,7 @@ def _phrases(blocks: Sequence[object]) -> list[tuple[float, str]]:
                 at_char = offset
             offset = at_char + len(sentence)
             if sentence.strip():
-                flat.append((_moment(block, at_char), sentence))
+                flat.append((_moment(block, at_char), sentence, speaker))
     return flat
 
 

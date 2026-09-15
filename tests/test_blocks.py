@@ -9,6 +9,7 @@ from minuteforge.blocks import (
     normalize_speaker,
     rename_speakers,
     speakers,
+    within,
 )
 
 
@@ -295,3 +296,33 @@ def test_a_bare_greeting_is_not_taken_for_a_roll_call():
 
     assert dropped == 11, "уходит перекличка, приветствие остаётся"
     assert [b.text for b in kept][0] == "Здравствуйте!"
+
+
+def test_the_meeting_window_cuts_what_is_outside_it():
+    """Начало записи бывает не разговором: подключение и проверка связи."""
+    blocks = [
+        Block("SPEAKER_00", "Северный филиал.", 60, 70),
+        Block("SPEAKER_01", "Слышно, видно.", 80, 90),
+        Block("ведущий", "Переходим к повестке.", 600, 610),
+        Block("ведущий", "Всем спасибо, до связи.", 7000, 7010),
+    ]
+    kept, dropped = within(blocks, since=300)
+    assert [b.start for b in kept] == [600, 7000]
+    assert dropped == 2
+
+    kept, dropped = within(blocks, since=300, until=6000)
+    assert [b.start for b in kept] == [600]
+    assert dropped == 3
+
+
+def test_without_a_window_nothing_is_cut():
+    """Границы необязательные: нет ни одной — запись берётся целиком."""
+    blocks = [Block("SPEAKER_00", "Речь", 10, 20)]
+    assert within(blocks) == (blocks, 0)
+
+
+def test_a_reply_without_time_stays():
+    """Стенограмму приносят и руками набранной. Выбрасывать реплику за то,
+    что в ней нет секунд, значило бы молча терять половину документа."""
+    blocks = [Block("SPEAKER_00", "Речь без времени")]
+    assert within(blocks, since=300) == (blocks, 0)

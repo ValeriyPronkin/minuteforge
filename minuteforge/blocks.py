@@ -209,6 +209,42 @@ def drop_soundcheck(
     return kept, dropped
 
 
+def within(
+    blocks: Sequence[Block],
+    *,
+    since: float | None = None,
+    until: float | None = None,
+) -> tuple[list[Block], int]:
+    """Оставляет реплики внутри отрезка записи.
+
+    Возвращает оставшиеся и число убранных. Нужно там, где начало записи
+    заведомо не разговор: подключение, проверка связи, ожидание кворума.
+    Правило :func:`is_soundcheck` берёт такую реплику по словам, но берёт не
+    всякую — «Амурская область.» на перекличке от передачи слова по одной
+    фразе неотличима, а по времени отличима сразу.
+
+    Отрезок задаёт человек, потому что знает запись; инструмент угадывать
+    его не берётся. Границы необязательные и независимые: можно срезать
+    только начало, только конец или ничего.
+
+    Реплика без времени остаётся: стенограмму приносят и руками набранной,
+    и выбрасывать её за то, что в ней нет секунд, значило бы молча терять
+    половину документа.
+    """
+    kept: list[Block] = []
+    dropped = 0
+    for block in blocks:
+        start = block.start
+        if start is not None and (
+            (since is not None and start < since)
+            or (until is not None and start > until)
+        ):
+            dropped += 1
+            continue
+        kept.append(block)
+    return kept, dropped
+
+
 @dataclass
 class Transcript:
     """Стенограмма целиком."""

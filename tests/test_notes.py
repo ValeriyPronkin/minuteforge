@@ -157,6 +157,33 @@ def test_an_invented_thesis_is_dropped():
     assert _why_dropped("Отставание от дорожной карты составляет полтора года.", source)
 
 
+def test_an_invented_number_is_dropped_however_it_is_worded():
+    """Доля общих слов выдумку ловит плохо: пересказ законно меняет слова, а
+    подставленное число слов почти не меняет. А выдуманное число — худшее,
+    что может случиться с протоколом: словами спорят, цифру переносят в
+    отчёт как есть."""
+    source = "докладчик: Модернизация завершена, ввод до 31.12.2026 года."
+    assert _why_dropped("Готовность составляет 93,5 %.", source).startswith(
+        "в куске не звучало"
+    )
+    assert not _why_dropped("Модернизация завершена, ввод до 31.12.2026.", source)
+
+
+def test_a_chunk_answered_in_english_is_asked_again():
+    """`mistral` срывается на английский, и кусок теряется целиком: на записи
+    03.09 так пропали Якутия и Калмыкия — по два десятка верных тезисов.
+    Дешевле переспросить, чем потерять доклад."""
+    reports, _ = split_into_reports(meeting(), directory(), floor=60)
+    client = FakeClient(
+        said("Workshop readiness is 93,5 percent."),
+        said("Готовность цеха 93,5 процента."),
+        said("Закуплено двадцать единиц техники."),
+    )
+    notes = take_notes(reports[:1], client)
+    assert notes[0].theses == ["Готовность цеха 93,5 процента."]
+    assert len(client.prompts) == 2
+
+
 def test_an_answer_in_another_language_is_dropped():
     """Мелкая модель срывается на английский, и это видно только проверкой."""
     source = "докладчик: Готовность цеха 93,5 процента."

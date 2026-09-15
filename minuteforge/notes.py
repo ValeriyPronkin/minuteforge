@@ -47,10 +47,24 @@ from .tasks import _moment, _sentences, _significant, is_directive, is_russian
 #: пункта, который вычёркивают при вычитке.
 REPORT_SECONDS = 90
 
-#: Какая доля значащих слов тезиса должна найтись в куске. Ниже — модель уже
-#: не пересказывает, а сочиняет: «готовность 93,5 %» превращается в
-#: «готовность 93,5 % при отставании от графика», где отставания не звучало.
-FROM_THE_CHUNK = 0.7
+#: Какая доля значащих слов тезиса должна найтись в куске.
+#:
+#: Мерка грубая, и точнее её не сделать: в тезисе из пяти значащих слов шаг
+#: между «четыре из пяти» и «три из пяти» — двадцать процентов, а пересказ
+#: законно меняет слова. На пороге 70 % отсеивалось «Суд по лишению лицензии
+#: перенесён на октябрь, вероятность оценена как 90 %» — тезис верный и
+#: целиком из записи. Поэтому порог 60 %, а настоящую защиту от выдумки
+#: держат числа: см. :func:`_invented_numbers`.
+FROM_THE_CHUNK = 0.6
+
+#: Чем переспросить, когда модель ответила не по-русски. Указания у неё
+#: русские, и кусок русский, а `mistral` всё равно срывается на английский —
+#: на записи 03.09 так потерялись Якутия и Калмыкия целиком, по два десятка
+#: верных тезисов. Дешевле переспросить, чем потерять доклад.
+SAY_IT_IN_RUSSIAN = (
+    "\n\nПредыдущий ответ был не по-русски. Отвечай по-русски, "
+    "тем же языком, каким говорят в куске."
+)
 
 #: Сколько знаков позволено тезису. Модель, которой велели писать полнее,
 #: иногда пересказывает кусок целиком.
@@ -258,6 +272,7 @@ NOTES_SYSTEM = """Ты — секретарь совещания. Тебе да�
   «усилить», «в срок до»: это другой раздел протокола;
 — не добавляй того, чего в куске нет: ни оценок, ни выводов, ни причин;
 — не пересказывай перекличку, приветствия и благодарности;
+— пиши по-русски, каким бы ни был язык указаний;
 — тезис должен быть законченным утверждением, а не заголовком графы:
   «Готовность цеха 93,5 %» — да, «Показатели мощности» — нет;
 — не больше трёх тезисов; доложено не о чем — верни пустой список.
@@ -344,6 +359,35 @@ def _ask(
     journal: object | None = None,
 ) -> list[str]:
     """Тезисы по одной части доклада — те, что выдержали проверку."""
+    theses = _answered(client, system, chunk, json_mode=json_mode)
+    if theses and all(not is_russian(thesis) for thesis in theses):
+        # Не по-русски ответила не половина тезисов, а весь кусок целиком —
+        # значит сорвалась модель, а не тезис не удался. Переспрашиваем.
+        again = _answered(
+            client, system + SAY_IT_IN_RUSSIAN, chunk, json_mode=json_mode,
+        )
+        if any(is_russian(thesis) for thesis in again):
+            logger.info("Кусок пересказан заново по-русски: {}", unit or "—")
+            theses = again
+
+    at = min(
+        (b.start for b in getattr(chunk, "blocks", []) if b.start is not None),
+        default=None,
+    )
+    kept: list[str] = []
+    for thesis in theses:
+        why = _why_dropped(thesis, chunk.text)
+        if journal is not None:
+            journal.thesis(unit, at, thesis, why)
+        if not why:
+            kept.append(thesis)
+    return kept
+
+
+def _answered(
+    client: LLMClient, system: str, chunk: Chunk, *, json_mode: bool,
+) -> list[str]:
+    """Что модель ответила на кусок. Сбой запроса — пустой список."""
     try:
         reply = client.complete(
             system, chunk.text,
@@ -353,18 +397,7 @@ def _ask(
     except LLMError as exc:
         logger.warning("Часть доклада не пересказана: {}", exc)
         return []
-    at = min(
-        (b.start for b in getattr(chunk, "blocks", []) if b.start is not None),
-        default=None,
-    )
-    kept: list[str] = []
-    for thesis in _read(reply.text):
-        why = _why_dropped(thesis, chunk.text)
-        if journal is not None:
-            journal.thesis(unit, at, thesis, why)
-        if not why:
-            kept.append(thesis)
-    return kept
+    return _read(reply.text)
 
 
 def _read(answer: str) -> list[str]:
@@ -443,6 +476,9 @@ def _why_dropped(thesis: str, source: str) -> str:
         # свой раздел, хуже пропущенного: его исполнят дважды или не
         # исполнят вовсе.
         return "звучит требованием — это «Решили»"
+    invented = _invented_numbers(thesis, source)
+    if invented:
+        return f"в куске не звучало: {', '.join(sorted(invented))}"
     words = _significant(thesis)
     if not words:
         return "нет значащих слов"
@@ -450,6 +486,34 @@ def _why_dropped(thesis: str, source: str) -> str:
     if share < FROM_THE_CHUNK:
         return f"в куске найдено: {share:.0%} слов из {len(words)}"
     return ""
+
+
+#: Число в тексте: 93,5 · 42 · 2026 · 15.
+_NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
+
+
+def _invented_numbers(thesis: str, source: str) -> set[str]:
+    """Числа тезиса, которых в куске не звучало.
+
+    Доля общих слов ловит выдумку плохо: пересказ законно меняет слова, а
+    подставленное число слов почти не меняет. На записи 03.09 в доклад
+    Амурской области переехали «готовность 93,5 %» и «ввод 15 декабря» —
+    показатели Архангельской, с которой модель их и взяла.
+
+    Выдуманное число — худшее, что может случиться с протоколом: словами
+    спорят, а цифру переносят в отчёт как есть. Поэтому здесь не доля, а
+    строгое требование: не прозвучало — тезиса нет.
+    """
+    said = {_as_number(found) for found in _NUMBER.findall(source or "")}
+    return {
+        found for found in _NUMBER.findall(thesis or "")
+        if _as_number(found) not in said
+    }
+
+
+def _as_number(text: str) -> str:
+    """«93.5» и «93,5» — одно и то же число."""
+    return text.replace(".", ",")
 
 
 #: Чем требование притворяется существительным: «Необходимость провести

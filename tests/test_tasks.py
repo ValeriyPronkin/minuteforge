@@ -1191,6 +1191,17 @@ def test_the_check_drops_a_report_retold_as_an_order():
     assert [t.what for t in kept] == ["Подготовить справку", "Проверить площадки"]
 
 
+def test_how_long_the_meeting_runs_is_not_a_deadline():
+    """«Завершить встречу в течение полутора часов» — порядок ведения, а не
+    поручение со сроком. Поручений на часы и минуты не дают."""
+    from minuteforge.tasks import due_point
+
+    assert not due_point("Завершить встречу в течение полутора часов")
+    assert not due_point("Продолжить через десять минут")
+    assert due_point("Представить справку в течение 20 дней")
+    assert due_point("Вернуться через две недели")
+
+
 def test_a_named_day_saves_the_point_from_the_check():
     """Доклад себе срока не назначает, где бы тот ни стоял.
 

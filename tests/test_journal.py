@@ -127,3 +127,27 @@ def test_the_dropped_theses_are_written_down_with_the_reason():
 def test_without_theses_there_is_no_section_about_them():
     """Пустой заголовок в записке — такой же шум, как в протоколе."""
     assert "## Отмеченное" not in Journal().as_markdown()
+
+
+def test_the_time_of_every_stage_is_written_down():
+    """«Стало дольше» иначе обсуждается на ощупь: стадий девять, и по числу
+    пунктов не угадать, какая из них съела время."""
+    import time
+
+    from minuteforge.tasks import Task
+
+    record = Journal()
+    record.window(window(), '{}', 1)
+    time.sleep(0.05)
+    tasks = [Task(what="Подготовить справку"), Task(what="Проверить площадки")]
+    record.step("Отсев не поручений", tasks, tasks[:1])
+
+    assert record.spent["Чтение окон"] > 0
+    assert record.spent["Отсев не поручений"] >= 0.05
+    text = record.as_markdown()
+    assert "## Время" in text
+    assert "| Стадия | Было | Стало | Ушло | Время |" in text
+
+
+def test_without_any_work_there_is_no_time_section():
+    assert "## Время" not in Journal().as_markdown()

@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
@@ -59,6 +60,10 @@ class Step:
     #: Что появилось: склейка выдаёт новую формулировку взамен нескольких.
     came: list = field(default_factory=list)
     why: str = ""
+    #: Сколько стадия заняла. Нужно затем, что «стало дольше» иначе
+    #: обсуждается на ощупь: стадий девять, и какая из них съела время,
+    #: по числу пунктов не угадать.
+    seconds: float = 0.0
 
 
 @dataclass
@@ -79,14 +84,28 @@ class Journal:
         self.windows: list[Window] = []
         self.steps: list[Step] = []
         self.theses: list[Said] = []
+        #: Время меряется само, по промежуткам между записями: разбор идёт
+        #: стадия за стадией, и промежуток между двумя отметками и есть
+        #: длительность стадии. Просить об этом вызывающий код не нужно.
+        self._since = time.monotonic()
+        self.spent: dict[str, float] = {}
 
     # ------------------------------------------------------------ запись
+    def _mark(self, title: str) -> float:
+        """Закрывает промежуток и относит его к названной стадии."""
+        now = time.monotonic()
+        spent = now - self._since
+        self.spent[title] = self.spent.get(title, 0.0) + spent
+        self._since = now
+        return spent
+
     def window(self, chunk, answer: str, found: int) -> None:
         """Окно, ответ модели на него и сколько из ответа уцелело."""
         starts = [
             block.start for block in getattr(chunk, "blocks", [])
             if getattr(block, "start", None) is not None
         ]
+        self._mark("Чтение окон")
         self.windows.append(Window(
             index=getattr(chunk, "index", len(self.windows) + 1),
             total=getattr(chunk, "total", 0),
@@ -98,6 +117,7 @@ class Journal:
 
     def thesis(self, unit: str, at: float | None, text: str, why: str = "") -> None:
         """Тезис, предложенный моделью, и чем он отсеян. Пусто — уцелел."""
+        self._mark("Отмеченное")
         self.theses.append(Said(unit=unit, at=at, text=text, why=why))
 
     def step(self, title: str, before: Sequence, after: Sequence, why: str = "") -> None:
@@ -111,6 +131,7 @@ class Journal:
         now = {task.key: task for task in after}
         self.steps.append(Step(
             title=title,
+            seconds=self._mark(title),
             before=len(before),
             after=len(after),
             gone=[task for key, task in was.items() if key not in now],
@@ -154,18 +175,21 @@ class Journal:
                 "",
             ])
 
+        if self.spent:
+            lines.extend(_time_lines(self.spent))
+
         if self.steps:
             lines.extend([
                 "## Воронка",
                 "",
-                "| Стадия | Было | Стало | Ушло |",
-                "|---|---|---|---|",
+                "| Стадия | Было | Стало | Ушло | Время |",
+                "|---|---|---|---|---|",
             ])
             for step in self.steps:
                 change = step.before - step.after
                 lines.append(
                     f"| {step.title} | {step.before} | {step.after} | "
-                    f"{change if change > 0 else '—'} |"
+                    f"{change if change > 0 else '—'} | {_clock_of(step.seconds)} |"
                 )
             lines.append("")
 
@@ -207,6 +231,35 @@ class Journal:
                 lines.append("")
 
         return "\n".join(lines).rstrip() + "\n"
+
+
+def _time_lines(spent: dict[str, float]) -> list[str]:
+    """Сколько заняла каждая стадия.
+
+    «Стало дольше» иначе обсуждается на ощупь: стадий девять, каждая ходит к
+    модели своим числом запросов, и по числу пунктов не угадать, какая из
+    них съела время. Отдельно стоит стадия чтения окон — она одна идёт
+    столько же, сколько все прочие вместе.
+
+    Меряется время между записями в журнал, то есть вместе с ожиданием
+    сервера — оно здесь и есть главное.
+    """
+    total = sum(spent.values())
+    lines = ["## Время", "", "| Стадия | Время | Доля |", "|---|---|---|"]
+    for title, seconds in sorted(spent.items(), key=lambda it: -it[1]):
+        share = f"{100 * seconds / total:.0f}%" if total else "—"
+        lines.append(f"| {title} | {_clock_of(seconds)} | {share} |")
+    lines.extend([f"| **всего** | **{_clock_of(total)}** | |", ""])
+    return lines
+
+
+def _clock_of(seconds: float) -> str:
+    """«8 с», «3 мин 20 с» — читается глазом, а не считается в уме."""
+    if seconds < 10:
+        return f"{seconds:.1f} с"
+    if seconds < 60:
+        return f"{seconds:.0f} с"
+    return f"{int(seconds) // 60} мин {int(seconds) % 60:02d} с"
 
 
 def _notes_lines(theses: Sequence[Said]) -> list[str]:

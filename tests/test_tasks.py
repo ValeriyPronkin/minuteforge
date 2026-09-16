@@ -1191,6 +1191,36 @@ def test_the_check_drops_a_report_retold_as_an_order():
     assert [t.what for t in kept] == ["Подготовить справку", "Проверить площадки"]
 
 
+def test_a_named_day_saves_the_point_from_the_check():
+    """Доклад себе срока не назначает, где бы тот ни стоял.
+
+    Модель часто оставляет срок внутри формулировки, а графа при этом
+    пустая, — и проверка снимала пункт, ради которого графа сроков и
+    заведена.
+    """
+    from minuteforge.llm import Reply
+    from minuteforge.tasks import Task, verify
+
+    class AlwaysNo:
+        def complete(self, system, user, **kwargs):
+            return Reply(text='{"order": false}')
+
+    said = "Получить лицензию и начать эксплуатацию до 1 декабря"
+    dated = [
+        Task(what=f"{said} по объекту {number}", quote=said, context=said)
+        for number in range(1, 4)
+    ]
+    plain = [
+        Task(what=f"Описать ситуацию по объекту {number}",
+             quote="Ситуация такая.", context="Ситуация такая.")
+        for number in range(1, 4)
+    ]
+    kept = verify(dated + plain, AlwaysNo())
+
+    # Проверка сняла бы всё, но названный день её перевешивает.
+    assert [task.what for task in kept] == [task.what for task in dated]
+
+
 def test_a_check_that_drops_everything_is_not_believed():
     """Мелкая модель, не поняв вопроса, отвечает «нет» подряд.
 

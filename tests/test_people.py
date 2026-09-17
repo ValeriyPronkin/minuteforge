@@ -3,6 +3,7 @@ from pathlib import Path
 
 from minuteforge.blocks import Block
 from minuteforge.people import (
+    introduced_speakers,
     Person,
     canonical,
     find,
@@ -226,3 +227,65 @@ def test_a_name_heard_again_is_trusted():
     ])
 
     assert guesses["SPEAKER_19"].name == "Ларина Александра Николаевна"
+
+
+def test_a_speaker_who_names_himself_is_recognised():
+    """Самый надёжный способ опознать голос: человек, назвавший своё имя, в
+    нём не ошибается. Передача слова ведущим на это не похожа — там имя
+    звучит в чужой реплике и в чужом падеже."""
+    blocks = [
+        Block("SPEAKER_00", "Коллеги, начинаем. Первый вопрос повестки.", 0, 30),
+        Block(
+            "SPEAKER_01",
+            "Добрый день, это первый заместитель председателя правительства "
+            "Ширков Максим Вячеславович. Доложу по контейнерным площадкам.",
+            30, 300,
+        ),
+    ]
+    found = introduced_speakers(blocks)
+    assert found["SPEAKER_01"].name == "Ширков Максим Вячеславович"
+    assert "SPEAKER_00" not in found
+
+
+def test_greeting_the_chair_is_not_introducing_yourself():
+    """«Да, Джамбулат Хизирович, на связи» — обращение к ведущему, и имя там
+    стоит ДО слова, а не после. Подписать этим именем чужой голос значило бы
+    раздать половину поручений председателю."""
+    blocks = [
+        Block("SPEAKER_01", "Да, Джамбулат Хизирович, на связи. Слышно нас?", 0, 20),
+    ]
+    assert introduced_speakers(blocks) == {}
+
+
+def test_the_chair_handing_over_is_not_introducing_himself():
+    """«У нас на связи Семёнов Алексей Валерьевич, прокомментируйте» — так
+    объявляют чужое выступление, а не открывают своё. Приветствие эти два
+    случая и разделяет."""
+    blocks = [Block("SPEAKER_02", ANNOUNCEMENT)]
+    assert introduced_speakers(blocks) == {}
+
+
+def test_a_name_late_in_the_reply_is_not_an_introduction():
+    """Дальше по тексту «докладывает» звучит про третьих лиц."""
+    blocks = [
+        Block(
+            "SPEAKER_01",
+            "Добрый день. " + "По контейнерным площадкам ситуация штатная. " * 6
+            + "Докладывает Петров Иван Сергеевич из соседнего региона.",
+            0, 300,
+        ),
+    ]
+    assert introduced_speakers(blocks) == {}
+
+
+def test_naming_yourself_beats_being_handed_the_floor():
+    """Назвавшийся сам вернее, и его догадка не перебивается."""
+    blocks = [
+        Block("SPEAKER_00", "Слово предоставляется Иванову Ивану Ивановичу.", 0, 20),
+        Block(
+            "SPEAKER_01",
+            "Добрый день, это заместитель министра Петров Пётр Петрович.",
+            20, 300,
+        ),
+    ]
+    assert suggest_speakers(blocks)["SPEAKER_01"].name == "Петров Пётр Петрович"

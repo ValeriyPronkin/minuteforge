@@ -171,6 +171,13 @@ class Task:
     context: str = ""
     #: Кто это сказал.
     said_by: str = ""
+    #: Чем открылась реплика, в которой это прозвучало.
+    #:
+    #: Обращение стоит в её начале и относится ко всему сказанному дальше:
+    #: «Алексей Вячеславович, просьба какая? Аналитику разослать… давать
+    #: консультации…» — три поручения одному человеку, и назван он один раз.
+    #: Ни в цитате, ни в окне вокруг неё его уже нет.
+    opening: str = ""
     #: Срок датой, посчитанный от дня совещания. Отдельно от ``due``:
     #: там остаётся сказанное вслух — «через две недели», — а здесь то, по
     #: чему ставят на контроль. Пусто, если дата совещания неизвестна или
@@ -593,6 +600,18 @@ def most_addressed(blocks: Sequence[object]) -> str:
     return name if times >= CHAIR_MENTIONS else ""
 
 
+def _named_at_the_start(opening: str, directory=None) -> str:
+    """Обращение в начале реплики — но только если в нём назван кто-то.
+
+    «Коллеги,» и «Уважаемые участники,» открывают половину выступлений и не
+    адресуют ничего. Хуже того: обращение к залу отменяет графу направления
+    — поручение всему залу не приписывают одному региону, — и вышло бы, что
+    вежливый зачин лишает пункт единственного адресата, который у него был.
+    """
+    found = addressee(opening, directory)
+    return "" if found in COLLECTIVE_NAMES else found
+
+
 def with_addressee(
     tasks: Sequence[Task], *, chair: str = "", directory=None,
 ) -> list[Task]:
@@ -609,9 +628,15 @@ def with_addressee(
         if task.who or not task.quote:
             filled.append(task)
             continue
-        # Ищем и в цитате, и в куске: обращение бывает фразой раньше —
-        # «Коллеги Ростовской области. Просьба подтвердить срок ввода».
-        found = addressee(task.quote, directory) or addressee(task.context, directory)
+        # Ищем от ближнего к дальнему: в цитате, в окне вокруг неё и
+        # наконец в начале самой реплики. Последнее нужно чаще, чем кажется:
+        # обращение звучит один раз, а поручений за ним идёт три подряд, и
+        # до второго с третьим окно уже не достаёт.
+        found = (
+            addressee(task.quote, directory)
+            or addressee(task.context, directory)
+            or _named_at_the_start(task.opening, directory)
+        )
         if found and chair and same_person(found, chair):
             found = ""
         filled.append(replace(task, who=found) if found else task)
@@ -1546,6 +1571,7 @@ def attach_source(tasks: list[Task], chunk: Chunk) -> list[Task]:
             quote=found.quote if found else "",
             context=found.context if found else "",
             said_by=found.said_by if found else "",
+            opening=found.opening if found else "",
             unit=task.unit, due_date=task.due_date,
         ))
     return attached
@@ -1667,6 +1693,8 @@ class Source:
     context: str
     said_by: str
     block: object
+    #: Первая фраза реплики — там стоит обращение.
+    opening: str = ""
 
 
 #: Сколько фраз вокруг цитаты входит в кусок. Одной хватает: срок и адресат
@@ -1702,6 +1730,7 @@ def _best_sentence(words: set[str], chunk: Chunk) -> Source | None:
                     context=_with_neighbours(sentences, position),
                     said_by=block.speaker,
                     block=block,
+                    opening=sentences[0] if sentences else "",
                 )
             offset += len(sentence)
     return best

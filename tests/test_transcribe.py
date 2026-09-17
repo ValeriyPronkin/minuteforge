@@ -4,6 +4,7 @@ import pytest
 
 from minuteforge.config import HF_TOKEN_ENV, Settings
 from minuteforge.transcribe import (
+    vram_left,
     MissingToken,
     RecognitionError,
     recognize,
@@ -569,3 +570,41 @@ def test_a_long_hint_is_cut_by_whole_sentences(tmp_path):
     assert hint.endswith(".")
     assert "Предложение номер 0" in hint
     assert len(hint) / 3 <= 201
+
+
+class Card:
+    """Видеокарта-заглушка: столько свободно, столько всего."""
+
+    def __init__(self, free_gb: float, total_gb: float = 8.0):
+        outer = self
+
+        class cuda:
+            @staticmethod
+            def is_available():
+                return True
+
+            @staticmethod
+            def mem_get_info():
+                return int(outer.free * 2**30), int(outer.total * 2**30)
+
+        self.free = free_gb
+        self.total = total_gb
+        self.cuda = cuda
+
+
+def test_free_memory_is_asked_of_the_driver():
+    """Своя чистка возвращает память своего процесса, а соседа — Ollama —
+    она не касается. Драйвер же отвечает честно, со всеми процессами."""
+    assert vram_left(Card(2.0, 8.0)) == (2.0, 8.0)
+
+
+def test_without_a_card_there_is_nothing_to_report():
+    """Нет видеокарты или torch — пусто, и это не ошибка."""
+
+    class NoCard:
+        class cuda:
+            @staticmethod
+            def is_available():
+                return False
+
+    assert vram_left(NoCard) is None

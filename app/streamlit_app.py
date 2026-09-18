@@ -162,8 +162,16 @@ def _materials_near(file: Path | None) -> tuple[Path | None, list[Path]]:
     return here, []
 
 
-def pick_file_dialog() -> str | None:
+def pick_file_dialog(
+    title: str = "Выберите запись совещания",
+    kinds: str = "Видео и аудио",
+    masks: str = "*.mp4 *.avi *.mov *.mkv *.webm *.wav *.m4a *.mp3",
+) -> str | None:
     """Открывает обычный системный диалог выбора файла.
+
+    :param title, kinds, masks: что выбираем. Диалог зовут и за записью, и за
+        готовой стенограммой, а фильтр у них разный: со списком видеофайлов
+        json просто не виден, и человек решает, что выбрать нечего.
 
     Браузер путь к файлу не отдаёт и отдать не может — это его устройство,
     страница не должна знать, что лежит на диске. Поэтому загрузка через
@@ -184,8 +192,8 @@ def pick_file_dialog() -> str | None:
         "root.withdraw()\n"
         "root.attributes('-topmost', True)\n"
         "print(filedialog.askopenfilename(\n"
-        "    title='Выберите запись совещания',\n"
-        "    filetypes=[('Видео и аудио', '*.mp4 *.avi *.mov *.mkv *.webm *.wav *.m4a *.mp3'),\n"
+        f"    title={title!r},\n"
+        f"    filetypes=[({kinds!r}, {masks!r}),\n"
         "               ('Все файлы', '*.*')]))\n"
     )
     try:
@@ -365,7 +373,11 @@ with st.sidebar:
     # остаётся запасным путём, для стенограммы с другой машины.
     st.caption("Готовая стенограмма (json)")
     if st.button("Выбрать стенограмму…", **full_width()):
-        chosen = pick_file_dialog()
+        chosen = pick_file_dialog(
+            title="Выберите готовую стенограмму",
+            kinds="Стенограмма",
+            masks="*.json",
+        )
         if chosen:
             st.session_state["segments_path"] = chosen
             st.session_state.pop("segments_taken", None)

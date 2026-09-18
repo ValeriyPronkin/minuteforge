@@ -4,6 +4,7 @@ from pathlib import Path
 from minuteforge.blocks import Block
 from minuteforge.people import (
     introduced_speakers,
+    like,
     Person,
     canonical,
     find,
@@ -289,3 +290,20 @@ def test_naming_yourself_beats_being_handed_the_floor():
         ),
     ]
     assert suggest_speakers(blocks)["SPEAKER_01"].name == "Петров Пётр Петрович"
+
+
+def test_the_same_person_is_found_however_the_name_is_written():
+    """Догадка о голосе приезжает из записи — без должности, а в списке тот
+    же человек записан с нею. Строки не совпадают, и подсказка пропадала
+    впустую: поле в «Кто есть кто» оставалось пустым, хотя ответ был
+    известен."""
+    roster = [
+        Person("Голованова Александра Николаевна", "Директор департамента", "ППК"),
+        Person("Петров Пётр Петрович", "Главный инженер", ""),
+    ]
+    found = like(roster, "Голованова Александра Николаевна")
+    assert found is not None and found.position == "Директор департамента"
+    # И наоборот: отчество распознавание коверкает, фамилия держится.
+    assert like(roster, "Голованова Александра Николавна") is found
+    assert like(roster, "Сидоров Иван Иванович") is None
+    assert like(roster, "") is None

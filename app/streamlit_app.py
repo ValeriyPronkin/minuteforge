@@ -45,6 +45,7 @@ from minuteforge.transcribe import read_hints  # noqa: E402
 from minuteforge.journal import setup_file_log  # noqa: E402
 from minuteforge.llm import LLMClient, free_the_card, is_embedder, same_model  # noqa: E402
 from minuteforge.people import (  # noqa: E402
+    like,
     merge_suggestions,
     mentioned_people,
     read_people,
@@ -402,8 +403,18 @@ with st.sidebar:
     # По умолчанию — рядом с записью: если видео лежит в папке заседания, туда же
     # ложатся стенограмма и протокол, и разносить потом нечего. Для записи из
     # data/input смысла в этом нет — там перевалочная папка, не заседание.
-    near = source_path.parent if source_path and source_path.parent != INPUT_DIR else None
-    default_out = str(near or OUTPUT_DIR)
+    # Папка заседания — та, где лежат материалы, а нет материалов — та, где
+    # лежит выбранный файл. Считается один раз и служит двум делам: отсюда
+    # берутся документы секретаря и сюда же ложится результат.
+    #
+    # Для записи из data/input этого не делаем: там перевалочная папка, а не
+    # заседание, и складывать протоколы в неё незачем.
+    beside = source_path or segments_path
+    meeting_dir, materials = _materials_near(beside)
+    if meeting_dir in (INPUT_DIR, None):
+        meeting_dir = None
+
+    default_out = str(meeting_dir or OUTPUT_DIR)
     out_dir = Path(st.text_input(
         "Куда сохранять результаты",
         default_out,
@@ -447,8 +458,7 @@ with st.sidebar:
     # ложится в свою папку прогона внутри папки заседания, и материалы тогда
     # этажом выше. Поэтому не «рядом», а «в папке заседания»: смотрим ту
     # папку, где лежит файл, а не нашли — поднимаемся на этаж.
-    beside = source_path or segments_path
-    materials_dir, materials = _materials_near(beside)
+    materials_dir = meeting_dir
     if materials:
         st.caption(
             f"Материалы секретаря в `{materials_dir.name}`: {len(materials)} — "
@@ -1146,8 +1156,13 @@ def name_field(label: str) -> None:
     sample = next((b.text for b in transcript.blocks if b.speaker == label), "")
     # Догадка ставится по умолчанию, но остаётся догадкой: человек видит её
     # рядом с первой репликой и либо соглашается, либо правит.
+    # Догадка приезжает из записи — без должности, а в списке тот же человек
+    # записан с нею. Строки не совпадают, и подсказка пропадала впустую:
+    # поле оставалось пустым, хотя ответ был известен. Сводим по фамилии.
     guess = guesses.get(label)
-    default = options.index(guess.full) if guess and guess.full in options else 0
+    known_as = like(people, guess.name) if guess else None
+    suggested = (known_as or guess).full if guess else ""
+    default = options.index(suggested) if suggested in options else 0
     title = f"{label} — {seconds / 60:.0f} мин ({seconds / total_spoken:.0%})"
     choice = st.selectbox(title, options, index=default, key=f"pick_{label}")
     if choice == OTHER:
@@ -1170,7 +1185,8 @@ def name_field(label: str) -> None:
 # выбора: иначе поле осталось пустым, и человеку всё равно его заполнять.
 known = [
     label for label in ordered
-    if (guess := guesses.get(label)) is not None and guess.full in options
+    if (guess := guesses.get(label)) is not None
+    and ((like(people, guess.name) or guess).full in options)
 ]
 covered = sum(spoken.get(label, 0.0) for label in known) / total_spoken
 

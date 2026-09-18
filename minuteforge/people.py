@@ -96,6 +96,29 @@ def find(people: Iterable[Person], name: str) -> Person | None:
     return None
 
 
+def like(people: Iterable[Person], name: str) -> Person | None:
+    """Тот же человек, как бы ни было написано его имя.
+
+    В отличие от :func:`find`, сравнивает по фамилии. Нужно там, где имя
+    пришло из записи: догадка о голосе приезжает как «Голованова Александра
+    Николаевна» без должности, а в списке участников тот же человек записан
+    «Голованова Александра Николаевна, Директор департамента, ППК РЭО».
+    Строки не совпадают, и подсказка пропадала впустую — поле в «Кто есть
+    кто» оставалось пустым, хотя ответ был известен.
+
+    Фамилия выбрана по той же причине, что и в :func:`merge_suggestions`:
+    в ФИО она самая устойчивая часть и меньше прочих страдает от
+    распознавания.
+    """
+    wanted = _surname(name or "").casefold()
+    if not wanted:
+        return None
+    for person in people:
+        if _surname(person.name).casefold() == wanted:
+            return person
+    return None
+
+
 def _read_lines(source: str | Path | IO[bytes]) -> list[str]:
     if isinstance(source, (str, Path)):
         text = Path(source).read_text(encoding="utf-8-sig")

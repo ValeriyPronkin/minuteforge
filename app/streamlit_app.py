@@ -43,7 +43,7 @@ from minuteforge.dates import date_from_name  # noqa: E402
 from minuteforge.directory import read_directory  # noqa: E402
 from minuteforge.transcribe import read_hints  # noqa: E402
 from minuteforge.journal import setup_file_log  # noqa: E402
-from minuteforge.llm import LLMClient, is_embedder, same_model  # noqa: E402
+from minuteforge.llm import LLMClient, free_the_card, is_embedder, same_model  # noqa: E402
 from minuteforge.people import (  # noqa: E402
     merge_suggestions,
     mentioned_people,
@@ -889,6 +889,10 @@ if source_path is not None or uploaded is not None:
         st.session_state["cache_dir"] = cache_dir_for(
             source, WORK_DIR, start=from_time or None, end=to_time or None
         )
+        # Видеопамять освобождается до первого шага: языковая модель висит в
+        # ней ещё пять минут после прошлого разбора, и распознавание начнётся
+        # на остатках — с ужатой порцией и расшифровкой похуже. Молча.
+        free_the_card(settings)
         live = Live("Готовлюсь…")
         try:
             transcript = transcribe_meeting(

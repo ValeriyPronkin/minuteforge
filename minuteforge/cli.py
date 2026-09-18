@@ -28,7 +28,7 @@ from .blocks import Transcript, blocks_from_segments, consolidate
 from .checks import suspicious
 from .config import HF_TOKEN_ENV, Settings
 from .journal import setup_file_log
-from .llm import LLMClient
+from .llm import LLMClient, free_the_card
 from .audio import AudioError, ffmpeg_available
 from .people import merge_suggestions, mentioned_people, read_people
 from .pipeline import (
@@ -333,6 +333,7 @@ def print_step(step) -> None:
 def command_recognize(args: argparse.Namespace) -> int:
     settings = settings_from(args)
     work_dir = args.out or args.source.parent
+    free_the_card(settings)
     transcript = transcribe_meeting(
         args.source, settings, work_dir=work_dir,
         diarize=not args.no_diarize, progress=print_step, fresh=args.fresh,
@@ -429,6 +430,7 @@ def command_run(args: argparse.Namespace) -> int:
         else:
             args.date = found.as_text()
             print(f"Дата совещания {found.source}: {args.date}")
+    free_the_card(settings)
     transcript = transcribe_meeting(
         args.source, settings, work_dir=args.out, progress=print_step
     )

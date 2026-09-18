@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Protocol
 from urllib.parse import urlparse
 
@@ -402,6 +402,35 @@ class LLMClient:
                 f"{self.settings.llm_model}"
             )
         return ""
+
+
+def free_the_card(settings: Settings | None = None) -> list[str]:
+    """Просит сервер моделей освободить видеопамять перед распознаванием.
+
+    Своя чистка между шагами возвращает память своего процесса и ничего не
+    может поделать с соседом: Ollama — отдельный процесс и держит модель
+    загруженной ещё пять минут после последнего ответа. На карте с восемью
+    гигабайтами это значит, что распознавание начнётся на остатках: порция
+    ужмётся вдвое, а то и модель спустится на ступень ниже. Расшифровка при
+    этом выйдет хуже молча — и стоит это пропущенного доклада, проверено на
+    записи 27 августа.
+
+    Выгружаются обе модели — и выписывающая, и проверяющая: в памяти может
+    висеть любая, смотря чем кончился прошлый разбор.
+
+    Возвращает имена тех, кого сервер согласился убрать. Не ответил — значит
+    там не Ollama или её нет вовсе, и это не ошибка: распознавание идёт
+    своим чередом.
+    """
+    settings = settings or Settings()
+    names = [settings.llm_model, settings.llm_verify_model]
+    freed: list[str] = []
+    for name in dict.fromkeys(filter(None, names)):
+        if LLMClient(replace(settings, llm_model=name)).unload():
+            freed.append(name)
+    if freed:
+        logger.info("Видеопамять освобождена от моделей: {}", ", ".join(freed))
+    return freed
 
 
 def _schema_format(schema: dict) -> dict:

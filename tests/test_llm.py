@@ -4,7 +4,7 @@ import pytest
 import requests
 
 from minuteforge.config import Settings
-from minuteforge.llm import LLMClient, LLMError, LLMUnavailable
+from minuteforge.llm import LLMClient, LLMError, LLMUnavailable, free_the_card
 
 
 class FakeResponse:
@@ -446,3 +446,37 @@ def test_server_that_never_answers_is_reported_once():
     with patch("time.sleep"):
         with pytest.raises(LLMUnavailable, match="не отвечает по адресу"):
             client.complete("система", "вопрос")
+
+
+def test_both_models_are_asked_to_leave_the_card(monkeypatch):
+    """Выгружаются обе — и выписывающая, и проверяющая: в памяти висит
+    любая, смотря чем кончился прошлый разбор."""
+    asked = []
+
+    def unload(self):
+        asked.append(self.settings.llm_model)
+        return True
+
+    monkeypatch.setattr(LLMClient, "unload", unload)
+    settings = Settings(llm_model="mistral", llm_verify_model="qwen14-protocol")
+
+    assert free_the_card(settings) == ["mistral", "qwen14-protocol"]
+    assert asked == ["mistral", "qwen14-protocol"]
+
+
+def test_one_model_named_twice_is_unloaded_once(monkeypatch):
+    """Выписывает и проверяет одна и та же — просить дважды незачем."""
+    asked = []
+    monkeypatch.setattr(
+        LLMClient, "unload",
+        lambda self: asked.append(self.settings.llm_model) or True,
+    )
+    free_the_card(Settings(llm_model="mistral", llm_verify_model="mistral"))
+    assert asked == ["mistral"]
+
+
+def test_a_server_that_does_not_answer_is_not_an_error(monkeypatch):
+    """Не ответил — значит там не Ollama или её нет вовсе. Распознавание
+    идёт своим чередом."""
+    monkeypatch.setattr(LLMClient, "unload", lambda self: False)
+    assert free_the_card(Settings()) == []

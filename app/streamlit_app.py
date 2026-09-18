@@ -327,7 +327,30 @@ with st.sidebar:
             "Загрузить", type=["mp4", "avi", "mov", "mkv", "wav", "m4a", "mp3"]
         )
 
-    ready_segments = st.file_uploader("Готовая стенограмма (json)", type=["json"])
+    # Стенограмма выбирается диалогом по той же причине, что и запись:
+    # браузер отдаёт содержимое, но не путь, а вместе с путём теряется и
+    # папка заседания — та самая, где лежат материалы секретаря. Загрузка
+    # остаётся запасным путём, для стенограммы с другой машины.
+    st.caption("Готовая стенограмма (json)")
+    if st.button("Выбрать стенограмму…", **full_width()):
+        chosen = pick_file_dialog()
+        if chosen:
+            st.session_state["segments_path"] = chosen
+            st.session_state.pop("segments_taken", None)
+
+    segments_path: Path | None = None
+    stored_segments = st.session_state.get("segments_path")
+    if stored_segments:
+        candidate = Path(stored_segments)
+        if candidate.exists():
+            segments_path = candidate
+            st.caption(f"Стенограмма: `{candidate.name}`")
+        else:
+            st.error(f"Файл не найден: {candidate}")
+            st.session_state.pop("segments_path", None)
+
+    with st.expander("Стенограмма на другой машине"):
+        ready_segments = st.file_uploader("Загрузить стенограмму", type=["json"])
 
     # Путь показывается полным и заранее. Относительный «data/output» ничего
     # не говорит человеку, который запустил приложение ярлыком: искать файлы
@@ -376,7 +399,11 @@ with st.sidebar:
     # и присланные файлы в одну папку заседания проще, чем выбирать их по одному,
     # и результат тогда ложится туда же. Загрузка оставлена запасным путём — она
     # нужна, только если материалы на другой машине.
-    materials_dir = source_path.parent if source_path else None
+    # Рядом с записью, а нет записи — рядом со стенограммой: папка заседания
+    # одна и та же, и когда протокол пересобирают по готовой расшифровке,
+    # материалы секретаря лежат всё там же.
+    beside = source_path or segments_path
+    materials_dir = beside.parent if beside else None
     materials: list[Path] = []
     if materials_dir and materials_dir.exists():
         materials = sorted(
@@ -816,8 +843,20 @@ def suggest_meeting_date(source: Path | None, name: str = "") -> None:
 # ---------------------------------------------------------------- шаг 1
 st.subheader("Шаг 1. Распознавание")
 
-if ready_segments is not None:
+loaded = None
+came_from = ""
+if segments_path is not None and not st.session_state.get("segments_taken"):
+    # Один раз на выбор файла: сценарий перечитывается на каждое нажатие, и
+    # без отметки стенограмма читалась бы с диска постоянно, затирая правку
+    # имён, которую человек только что сделал.
+    st.session_state["segments_taken"] = str(segments_path)
+    loaded = json.loads(segments_path.read_text(encoding="utf-8-sig"))
+    came_from = segments_path.name
+elif ready_segments is not None:
     loaded = json.load(ready_segments)
+    came_from = ready_segments.name
+
+if loaded is not None:
     # Наши файлы помнят, чем распознаны; сохранённые прежними версиями —
     # голый список реплик, и тогда история неизвестна. Пусто лучше, чем
     # модель из прошлого разбора, который шёл в этом же окне.
@@ -830,8 +869,7 @@ if ready_segments is not None:
     )
     st.success(f"Загружена готовая стенограмма: {len(st.session_state['segments'])} сегментов.")
     # Записи рядом нет, и спросить дату не у кого — остаётся имя файла.
-    # Обычно это «стенограмма.json», и тогда поле останется пустым.
-    suggest_meeting_date(None, ready_segments.name)
+    suggest_meeting_date(None, came_from)
 
 if source_path is not None or uploaded is not None:
     suggest_meeting_date(source_path, uploaded.name if uploaded is not None else "")

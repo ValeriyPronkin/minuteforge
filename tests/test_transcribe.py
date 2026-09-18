@@ -608,3 +608,20 @@ def test_without_a_card_there_is_nothing_to_report():
                 return False
 
     assert vram_left(NoCard) is None
+
+
+def test_pyannote_memory_error_is_out_of_memory():
+    """Разметка голосов сообщает о нехватке памяти по-своему.
+
+    whisperx зовёт pyannote, тот ловит OutOfMemoryError и перевыбрасывает
+    обычным MemoryError с текстом про batch_size — без слов «out of memory».
+    Пока это не считалось нехваткой памяти, прогон падал целиком вместо
+    спуска на модель поменьше.
+    """
+    from minuteforge.transcribe import is_out_of_memory
+
+    beef = MemoryError(
+        "batch_size ( 32) is probably too large. "
+        "Try with a smaller value until memory error disappears."
+    )
+    assert is_out_of_memory(beef)

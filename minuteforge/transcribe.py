@@ -73,10 +73,23 @@ MODEL_LADDER = ("large-v3", "large-v2", "large", "medium", "small", "base", "tin
 
 #: Признак того, что кончилась видеопамять. Torch сообщает об этом
 #: по-разному в зависимости от версии, поэтому смотрим и на тип, и на текст.
-_OUT_OF_MEMORY = ("out of memory", "cuda oom", "не хватает памяти")
+#:
+#: Последний маркер — от pyannote: разметка голосов внутри whisperx ловит
+#: OutOfMemoryError сама и перевыбрасывает своим текстом, без слов «out of
+#: memory» и обычным MemoryError. Пока его тут не было, нехватка памяти на
+#: этом шаге роняла весь прогон вместо спуска на модель поменьше: на записи
+#: 17.09 расчёт умер после трёх бесполезных уменьшений порции.
+_OUT_OF_MEMORY = (
+    "out of memory",
+    "cuda oom",
+    "не хватает памяти",
+    "batch_size",
+)
 
 
 def is_out_of_memory(error: BaseException) -> bool:
+    if isinstance(error, MemoryError):
+        return True
     return any(mark in str(error).lower() for mark in _OUT_OF_MEMORY) or type(
         error
     ).__name__ == "OutOfMemoryError"
@@ -146,7 +159,16 @@ def free_vram(torch_module: Any | None = None) -> bool:
     except Exception as exc:  # чистка памяти не повод ронять расчёт
         logger.warning("Не удалось освободить видеопамять: {}", exc)
         return False
-    logger.debug("Видеопамять освобождена")
+    # Без цифры сообщение ничего не решает: «освобождена» пишется и тогда,
+    # когда освобождать было нечего, — память держит соседний процесс, и своя
+    # чистка до неё не дотягивается. Цифра сразу говорит, помогло или нет.
+    memory = vram_left(module)
+    if memory is None:
+        logger.debug("Видеопамять освобождена")
+    else:
+        logger.debug(
+            "Видеопамять освобождена: свободно {:.1f} ГБ из {:.1f}", *memory
+        )
     return True
 
 
@@ -403,6 +425,9 @@ def _transcribe_with_fallback(
                 if batch > 1:
                     batch = max(1, batch // 2)
                     note = f"порция уменьшена до {batch}"
+                    memory = vram_left()
+                    if memory is not None:
+                        note = f"{note} (свободно {memory[0]:.1f} ГБ из {memory[1]:.1f})"
                     if not result.fallbacks:
                         # Совет даётся один раз и сразу: раньше он звучал
                         # только тогда, когда не поместилась самая мелкая
@@ -415,6 +440,16 @@ def _transcribe_with_fallback(
                     logger.warning("Не хватило видеопамяти: {}", note)
                     result.fallbacks.append(note)
                     continue
+                # Переход говорится здесь, а не после успеха: между отказом на
+                # порции 1 и следующей попыткой проходят десятки секунд, и всё
+                # это время журнал молчал — со стороны неотличимо от зависания.
+                nxt = ladder[ladder.index(model) + 1] if model != ladder[-1] else None
+                if nxt:
+                    logger.warning(
+                        "Модель {} не поместилась даже на порции 1 — спускаюсь на {}",
+                        model, nxt,
+                    )
+                    result.fallbacks.append(f"{model} не поместилась, пробую {nxt}")
                 break  # порцию уменьшать больше некуда — меняем модель
 
             result.asr_model = model

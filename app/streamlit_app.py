@@ -130,6 +130,38 @@ def full_width() -> dict:
     return {}
 
 
+#: Насколько высоко подниматься от файла в поисках папки заседания. Хватает
+#: одного этажа: стенограмма и протокол ложатся в свою папку прогона внутри
+#: папки заседания, а выше неё — уже все заседания разом, и чужие материалы
+#: там попались бы наверняка.
+_UP = 1
+
+
+def _materials_near(file: Path | None) -> tuple[Path | None, list[Path]]:
+    """Папка заседания и материалы секретаря в ней.
+
+    Ищутся от файла вверх: рядом с записью они лежат прямо, а рядом со
+    стенограммой — этажом выше, потому что она сама лежит в папке прогона.
+    Возвращается та папка, где материалы нашлись, а не нашлись нигде — та, с
+    которой начали: человеку надо сказать, куда их класть.
+    """
+    if file is None:
+        return None, []
+    here = file.parent
+    for step in range(_UP + 1):
+        folder = here if step == 0 else here.parents[step - 1]
+        if not folder.exists():
+            break
+        found = sorted(
+            path for path in folder.glob("*")
+            if path.suffix.lower() in (".docx", ".xlsx")
+            and not path.name.startswith("~$")
+        )
+        if found:
+            return folder, found
+    return here, []
+
+
 def pick_file_dialog() -> str | None:
     """Открывает обычный системный диалог выбора файла.
 
@@ -399,29 +431,24 @@ with st.sidebar:
     # и присланные файлы в одну папку заседания проще, чем выбирать их по одному,
     # и результат тогда ложится туда же. Загрузка оставлена запасным путём — она
     # нужна, только если материалы на другой машине.
-    # Рядом с записью, а нет записи — рядом со стенограммой: папка заседания
-    # одна и та же, и когда протокол пересобирают по готовой расшифровке,
-    # материалы секретаря лежат всё там же.
+    # Рядом с записью, а нет записи — рядом со стенограммой. Но стенограмма
+    # ложится в свою папку прогона внутри папки заседания, и материалы тогда
+    # этажом выше. Поэтому не «рядом», а «в папке заседания»: смотрим ту
+    # папку, где лежит файл, а не нашли — поднимаемся на этаж.
     beside = source_path or segments_path
-    materials_dir = beside.parent if beside else None
-    materials: list[Path] = []
-    if materials_dir and materials_dir.exists():
-        materials = sorted(
-            path for path in materials_dir.glob("*")
-            if path.suffix.lower() in (".docx", ".xlsx") and not path.name.startswith("~$")
+    materials_dir, materials = _materials_near(beside)
+    if materials:
+        st.caption(
+            f"Материалы секретаря в `{materials_dir.name}`: {len(materials)} — "
+            + ", ".join(path.name for path in materials[:3])
+            + (" и ещё…" if len(materials) > 3 else "")
         )
-        if materials:
-            st.caption(
-                f"Материалы секретаря рядом с записью: {len(materials)} — "
-                + ", ".join(path.name for path in materials[:3])
-                + (" и ещё…" if len(materials) > 3 else "")
-            )
-        else:
-            st.caption(
-                f"В папке записи (`{materials_dir.name}`) файлов секретаря нет. "
-                "Положите туда тезисы и выгрузку формы — из них соберутся список "
-                "участников и подсказка распознаванию."
-            )
+    elif materials_dir:
+        st.caption(
+            f"В папке заседания (`{materials_dir.name}`) файлов секретаря нет. "
+            "Положите туда тезисы и выгрузку формы — из них соберутся список "
+            "участников и подсказка распознаванию."
+        )
 
     with st.expander("Материалы на другой машине"):
         uploaded_materials = st.file_uploader(

@@ -11,9 +11,11 @@ SPEAKER_00. Автоматически это не определить, а пр
 from __future__ import annotations
 
 import inspect
+import io
 import json
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -66,6 +68,21 @@ from minuteforge.pipeline import (  # noqa: E402
     transcribe_meeting,
 )
 from minuteforge import LOADED_REVISION, disk_revision  # noqa: E402
+
+# Подготовка материалов секретаря живёт в scripts/, а не в пакете: она не участвует
+# в расчёте, а только готовит входы к нему. Импортируется по пути, чтобы не заводить
+# ради одного модуля зависимость пакета от папки со вспомогательными скриптами.
+import importlib.util as _ilu  # noqa: E402
+
+_prep_path = Path(__file__).resolve().parent.parent / "scripts" / "prepare_meeting.py"
+_spec = _ilu.spec_from_file_location("prepare_meeting", _prep_path)
+prep = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(prep)
+
+# Накопительный справочник людей и постоянный глоссарий лежат в data/vks: там же,
+# где заседания, и под общим запретом в .gitignore — в них настоящие ФИО.
+VKS_DIR = Path(__file__).resolve().parent.parent / "data" / "vks"
+GLOSSARY = VKS_DIR / "glossary.md"
 from minuteforge.checks import suspicious  # noqa: E402
 from minuteforge.transcribe import (  # noqa: E402
     MissingToken,
@@ -212,6 +229,58 @@ def transcript_from_state() -> Transcript | None:
     return transcript
 
 
+def prepare_materials(paths, uploads) -> list[str]:
+    """Из материалов секретаря — список участников и подсказка распознаванию.
+
+    Кладёт готовое в session_state: список подхватит шаг «Кто есть кто», подсказку —
+    распознавание. Ни то, ни другое не требует правки config.yaml, и в этом весь
+    смысл: секретарю остаётся положить файлы в папку заседания и выбрать запись.
+    """
+    texts, names, people, report = [], [], [], []
+    sources = [(path.name, path.read_bytes()) for path in paths or []]
+    sources += [(up.name, up.getbuffer()) for up in uploads or []]
+    if not sources:
+        return report
+
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, blob in sources:
+            path = Path(tmp) / name
+            path.write_bytes(blob)
+            try:
+                if path.suffix.lower() == ".docx":
+                    texts.append(prep.docx_to_text(path))
+                    names.append(name)
+                elif path.suffix.lower() == ".xlsx":
+                    people.extend(prep.roster(prep.xlsx_rows(path)))
+            except Exception as err:  # из почты файл приходит и битым
+                report.append(f"{name}: не разобран — {err}")
+
+    if people:
+        rows = ["ФИО;Должность;Организация"]
+        rows += [f"{fio};{post};{org}" for org, fio, post in sorted(people)]
+        st.session_state["prepared_roster"] = "\n".join(rows)
+        report.append(
+            f"Список участников собран: {len(people)} человек, "
+            f"{len({p[0] for p in people})} организаций."
+        )
+
+    if texts:
+        directory = prep.collect_people(VKS_DIR)
+        found, ask = prep.resolve_speakers(prep.speaker_candidates(texts, names), directory)
+        _, prose = prep.load_glossary(GLOSSARY)
+        hints = prep.build_asr_hints(prose, 550, found) if prose else ""
+        if hints:
+            st.session_state["asr_hints"] = hints
+            report.append(f"Подсказка распознаванию: {len(hints)} симв.")
+        elif not GLOSSARY.exists():
+            report.append(f"Глоссарий не найден: `{GLOSSARY}` — подсказка не собрана.")
+        if found:
+            report.append("Докладчики из справочника: " + ", ".join(found))
+        for line in ask:
+            report.append(f"Уточнить: {line}")
+    return report
+
+
 # ---------------------------------------------------------------- сайдбар
 with st.sidebar:
     st.header("Запись")
@@ -263,9 +332,15 @@ with st.sidebar:
     # Путь показывается полным и заранее. Относительный «data/output» ничего
     # не говорит человеку, который запустил приложение ярлыком: искать файлы
     # он будет наугад.
+    # По умолчанию — рядом с записью: если видео лежит в папке заседания, туда же
+    # ложатся стенограмма и протокол, и разносить потом нечего. Для записи из
+    # data/input смысла в этом нет — там перевалочная папка, не заседание.
+    near = source_path.parent if source_path and source_path.parent != INPUT_DIR else None
+    default_out = str(near or OUTPUT_DIR)
     out_dir = Path(st.text_input(
         "Куда сохранять результаты",
-        str(OUTPUT_DIR),
+        default_out,
+        key=f"out_dir::{default_out}",
         help="Стенограмма и протокол ложатся сюда сразу, без кнопок «скачать». "
         "Можно указать сетевую папку, из которой их заберёт другое "
         "подразделение.",
@@ -296,6 +371,44 @@ with st.sidebar:
             st.success(f"Освобождено {gone}. Готовые файлы на месте — они в другой папке.")
 
     st.header("Документ")
+
+    # Материалы секретаря берутся из папки записи, а не загрузкой: класть видео
+    # и присланные файлы в одну папку заседания проще, чем выбирать их по одному,
+    # и результат тогда ложится туда же. Загрузка оставлена запасным путём — она
+    # нужна, только если материалы на другой машине.
+    materials_dir = source_path.parent if source_path else None
+    materials: list[Path] = []
+    if materials_dir and materials_dir.exists():
+        materials = sorted(
+            path for path in materials_dir.glob("*")
+            if path.suffix.lower() in (".docx", ".xlsx") and not path.name.startswith("~$")
+        )
+        if materials:
+            st.caption(
+                f"Материалы секретаря рядом с записью: {len(materials)} — "
+                + ", ".join(path.name for path in materials[:3])
+                + (" и ещё…" if len(materials) > 3 else "")
+            )
+        else:
+            st.caption(
+                f"В папке записи (`{materials_dir.name}`) файлов секретаря нет. "
+                "Положите туда тезисы и выгрузку формы — из них соберутся список "
+                "участников и подсказка распознаванию."
+            )
+
+    with st.expander("Материалы на другой машине"):
+        uploaded_materials = st.file_uploader(
+            "Загрузить (docx, xlsx)",
+            type=["docx", "xlsx"],
+            accept_multiple_files=True,
+            help="Нужно, только если присланных файлов нет рядом с записью.",
+        )
+
+    prepared = prepare_materials(materials, uploaded_materials)
+    if prepared:
+        for line in prepared:
+            st.caption(line)
+
     roster_file = st.file_uploader(
         "Список участников (csv или txt)",
         type=["csv", "txt"],
@@ -894,7 +1007,12 @@ st.caption(
     "фамилия под чужими словами."
 )
 
-roster = read_people(roster_file) if roster_file is not None else []
+if roster_file is not None:
+    roster = read_people(roster_file)
+elif st.session_state.get("prepared_roster"):
+    roster = read_people(io.BytesIO(st.session_state["prepared_roster"].encode("utf-8")))
+else:
+    roster = []
 heard = mentioned_people(transcript.as_text())
 people = merge_suggestions(roster, heard)
 guesses = suggest_speakers(transcript.blocks)

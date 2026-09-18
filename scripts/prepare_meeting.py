@@ -117,9 +117,15 @@ def glossary_candidates(texts):
 
 
 def load_glossary(path):
-    """Читает постоянный глоссарий: {раздел: [термины]} в порядке следования разделов."""
+    """Читает постоянный глоссарий: {раздел: [термины]} в порядке следования разделов.
+
+    Возвращает две карты — термины (строки «- ») и текст подсказки (строки «> »).
+    Если файла нет, обе пустые: без глоссария подготовка обязана продолжиться,
+    а не упасть. Раньше здесь возвращалась одна пустая карта, и вызов
+    `sections, prose = load_glossary(...)` ронял интерфейс на ValueError.
+    """
     if not path or not os.path.exists(path):
-        return {}
+        return {}, {}
     sections, prose, cur = {}, {}, None
     for line in io.open(path, encoding='utf-8'):
         line = line.rstrip('\n')
@@ -208,6 +214,68 @@ def speaker_candidates(texts, filenames):
             seen.add(f.lower())
             out.append(f)
     return out
+
+
+def collect_people(vks_dir):
+    """Накопительный справочник людей: объединение участники.csv всех заседаний.
+
+    Нужен потому, что форма регистрации собирает представителей регионов, а ведущие
+    и докладчики из Минприроды в неё не подают: на 17.09 ни Хатуова, ни Головановой
+    в списке нет, а в списках 27.08 и 10.09 они есть. Чем больше заседаний прошло,
+    тем меньше остаётся неразобранных фамилий."""
+    people = {}
+    if not os.path.isdir(vks_dir):
+        return people
+    for name in sorted(os.listdir(vks_dir)):
+        path = os.path.join(vks_dir, name, 'участники.csv')
+        if not os.path.exists(path):
+            continue
+        with io.open(path, encoding='utf-8-sig') as f:
+            for row in csv.reader(f, delimiter=';'):
+                if len(row) >= 1 and row[0] and row[0] != 'ФИО':
+                    people[row[0].strip()] = (row[1].strip() if len(row) > 1 else '',
+                                              row[2].strip() if len(row) > 2 else '')
+    return people
+
+
+def resolve_speakers(candidates, people):
+    """Кандидат -> фамилия в именительном падеже, по накопленному справочнику.
+
+    Две формы: «Джамбулат Хизирович» (имя и отчество из обращения) и «Головановой»
+    (родительный падеж из названия файла). Сверка идёт по отдельным словам ФИО,
+    иначе «Александр Александрович» ложно совпадает с «Чакыров Алексей Александрович».
+    """
+    index = [(fio.split(), fio) for fio in people]
+    resolved, guesses = [], []
+    for cand in candidates:
+        for part in re.split(r'\s*,\s*', cand):
+            words = part.split()
+            hits = []
+            if len(words) == 2:
+                # Имя-отчество из обращения — НЕ подставляется само. Председательствующий
+                # в списки регионов не подаётся, и единственное совпадение запросто
+                # окажется однофамильцем: «Александр Александрович» дал «Алексеева»,
+                # тогда как речь была о Козлове. Такое уходит в подсказку человеку.
+                hits = [p[0] for p, _ in index if len(p) >= 3
+                        and p[1] == words[0] and p[2] == words[1]]
+                guesses.append('%s -> %s' % (part, ', '.join(hits) if hits
+                                             else 'в справочнике нет'))
+                continue
+            if len(words) == 1:
+                # Фамилия в косвенном падеже — сверка по основе, это надёжно:
+                # «Головановой» и «Голованова» совпадают на 9 буквах.
+                w = words[0]
+                hits = [p[0] for p, _ in index
+                        if len(os.path.commonprefix([p[0].lower(), w.lower()])) >= 5
+                        and abs(len(p[0]) - len(w)) <= 3]
+                hits = sorted(set(hits))
+            if len(hits) == 1 and hits[0] not in resolved:
+                resolved.append(hits[0])
+            elif len(hits) > 1:
+                guesses.append('%s -> несколько: %s' % (part, ', '.join(hits)))
+            elif not hits:
+                guesses.append('%s -> в справочнике нет' % part)
+    return resolved, guesses
 
 
 def read_speakers(meeting_dir):
@@ -331,6 +399,24 @@ def main():
                 f.write('%s\n' % k)
         print('-> speakers_candidates.txt (%d кандидатов)' % len(sp))
 
+        # Заготовка speakers.txt — только если его ещё нет: перезаписать значило бы
+        # затереть выправленные руками фамилии. Кандидаты идут закомментированными,
+        # потому что падеж у них родительный («Головановой»), а нужен именительный.
+        meeting = os.path.dirname(os.path.abspath(out.rstrip(os.sep)))
+        draft = os.path.join(meeting, 'speakers.txt')
+        if not os.path.exists(draft):
+            with io.open(draft, 'w', encoding='utf-8') as f:
+                f.write('# Кто ведёт и докладывает на этой ВКС. По фамилии в строке,\n')
+                f.write('# в именительном падеже. Строки с # не читаются.\n')
+                f.write('#\n')
+                f.write('# Ниже — что нашлось в тезисах. Раскомментируй нужное, выправи\n')
+                f.write('# падеж, лишнее удали. Потом запусти скрипт ещё раз — фамилии\n')
+                f.write('# попадут в asr_hints.txt.\n')
+                f.write('#\n')
+                for k in sp:
+                    f.write('# %s\n' % k)
+            print('-> speakers.txt — заготовка создана, впиши фамилии и запусти ещё раз')
+
         cand = glossary_candidates(texts)
         known = known_terms(sections)
         fresh = [(k, v) for k, v in cand if not is_known(k, known)]
@@ -348,8 +434,9 @@ def main():
         if speakers:
             print('докладчики из speakers.txt: %s' % ', '.join(speakers))
         else:
-            print('! speakers.txt не найден в %s — подсказка пойдёт без фамилий'
-                  % os.path.basename(meeting_dir))
+            есть = os.path.exists(os.path.join(meeting_dir, 'speakers.txt'))
+            print('! speakers.txt %s — подсказка пойдёт без фамилий'
+                  % ('пуст: все строки закомментированы' if есть else 'не найден'))
         hints = build_asr_hints(prose, a.budget, speakers)
         if hints:
             io.open(os.path.join(out, 'asr_hints.txt'), 'w', encoding='utf-8').write(hints)

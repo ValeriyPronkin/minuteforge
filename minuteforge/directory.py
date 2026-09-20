@@ -45,6 +45,15 @@ SHORT_MARK = 5
 #: «Чита», «Чите», «Читой». Больше — и «читать» снова становится Читой.
 SHORT_TAIL = 2
 
+#: Сколько слов позволено между «следующий» и названием. Объявляют коротко:
+#: «Следующая у нас Архангельская область», «Перейду к следующему региону, к
+#: Ульяновской области» — между словом и названием одно-два служебных слова.
+#: Дальше начинается не объявление, а разговор: «Следующая группа — это группа
+#: временных объектов по Брянскому законопроекту» называет направление восьмым
+#: словом, и на записи 17.09 по этой фразе Брянской области досталось двадцать
+#: минут чужого доклада — общей части про полигоны, где её вопрос не разбирали.
+NEXT_GAP = 3
+
 #: Сколько фраз вперёд искать название после объявления. Объявляют и
 #: называют обычно порознь: «Следующий.» — и уже в следующей фразе «Иван
 #: Иванович, Кисловодск». Двух хватает; дальше начинает попадаться
@@ -109,6 +118,15 @@ _QUIET = (
 )
 
 _NEXT = _next_pattern()
+
+#: Единица во множественном числе: «остановлюсь на регионах», «в таких
+#: регионах, как», «по площадкам». Ею объявляют не переход к одному, а обзор
+#: нескольких: дальше их перебирают внутри одного доклада, и своего
+#: объявления у каждого уже не будет — назовут и пойдут дальше.
+_MANY = re.compile(
+    rf"(?:{'|'.join(re.escape(word) for word in _ABOUT_A_UNIT)})"
+    r"(?:ах|ях|ам|ям|ами|ями|ов|ев|ы|и)(?![а-яёa-z])"
+)
 
 #: Чем открывают обращение к направлению, прежде чем назвать его:
 #: «Коллеги Ростовской области», «Администрация города Ессентуки».
@@ -189,13 +207,22 @@ class Directory:
         Если названы два, берётся первое: в фразе перехода — «Далее города
         округа, Ставропольский край» — первым идёт тот, к кому переходят.
         """
+        return self.search(text)[1]
+
+    def search(self, text: str) -> tuple[int, str]:
+        """То же, что :meth:`find`, но с местом: где название начинается.
+
+        Место нужно там, где важно не «названо ли», а «названо ли сразу»:
+        объявляют направление вплотную к слову перехода, а помянуть его
+        могут и в конце длинной фразы про другое.
+        """
         lowered = (text or "").lower()
         best: tuple[int, str] = (len(lowered) + 1, "")
         for name, pattern in self._compiled:
             found = pattern.search(lowered)
             if found and found.start() < best[0]:
                 best = (found.start(), name)
-        return best[1]
+        return best if best[1] else (-1, "")
 
     def find_all(self, text: str) -> list[str]:
         """Все направления, названные в тексте, по порядку справочника.
@@ -252,6 +279,30 @@ class Directory:
                 return name
         return ""
 
+    def named_alone(self, text: str) -> str:
+        """Одно направление, названное вместе со своей единицей.
+
+        Так обзор перебирает тех, кого объявил списком: «В Архангельской
+        области запланирована покупка», «ещё спрошу Приморский край»,
+        «обратить внимание на Республику Карелия». Каждое такое упоминание —
+        начало своего куска: объявления у него не будет, обзор объявили один
+        раз на всех.
+
+        Две проверки, и обе против ложного перехода. Названо должно быть
+        ровно одно: «Иркутская, Нижегородская, Свердловская области» — это
+        список благополучных, а не переход к Иркутской. И названо со своей
+        единицей: о разбираемом говорят полным названием, а мимоходом —
+        коротким, «а в Карелии проблемы», «первый слайд начинали с Омска».
+        """
+        lowered = (text or "").lower()
+        hits = [(name, found)
+                for name, pattern in self._compiled
+                if (found := pattern.search(lowered))]
+        if len({name for name, _ in hits}) != 1:
+            return ""
+        name, found = hits[0]
+        return name if _beside_a_unit(lowered, found) else ""
+
     def addressees(self) -> dict[str, str]:
         """Кому адресовать поручение по каждому направлению.
 
@@ -288,6 +339,10 @@ class Directory:
         flat = _phrases(blocks)
         leading = set(hosts) | who_leads(flat, self)
         marks: list[tuple[float, str]] = []
+        # Идёт ли обзор: объявили несколько направлений разом и перебирают
+        # их подряд. Пока он идёт, отметку ставит само упоминание — своего
+        # объявления у перечисленных не будет.
+        reviewing = False
         for position, (start, sentence, voice) in enumerate(flat):
             # Оклик — такое же объявление, как оборот, и название в нём уже
             # названо: искать его вперёд по соседним фразам не нужно. Но
@@ -297,7 +352,18 @@ class Directory:
             called = self.called_on(sentence) if voice in leading else ""
             announced = bool(called) or is_announcement(sentence, self)
             if not announced and not is_quiet_move(sentence):
+                if reviewing:
+                    name = self.named_alone(sentence)
+                    if name and (not marks or marks[-1][1] != name):
+                        marks.append((start, name))
                 continue
+            if opens_a_review(sentence, self):
+                # Обзор — не переход: своего направления у него нет, стирать
+                # по нему нечего. Перечисленных разберут по очереди, и
+                # отметка встанет на каждого, когда до него дойдут.
+                reviewing = True
+                continue
+            reviewing = False
             if called:
                 name = called
             elif leaves_the_round(sentence):
@@ -429,7 +495,7 @@ def is_announcement(text: str, directory: "Directory | None" = None) -> bool:
     lowered = (text or "").lower()
     if _NEXT.search(lowered):
         return True
-    if "следующ" in lowered and directory and directory.find(text):
+    if directory and _names_the_next(lowered, directory):
         return True
     if not any(word in lowered for word in _MOVE):
         return False
@@ -437,6 +503,66 @@ def is_announcement(text: str, directory: "Directory | None" = None) -> bool:
         any(word in lowered for word in _ABOUT_A_UNIT)
         or leaves_the_round(text)
         or bool(directory and directory.find(text))
+    )
+
+
+def _names_the_next(lowered: str, directory: "Directory") -> bool:
+    """Названо ли направление сразу за словом «следующий».
+
+    Объявление без слова-единицы: «Следующая у нас Архангельская область» —
+    единица не названа, названо само направление, и объявлением это быть не
+    перестаёт. Но название должно стоять вплотную: «следующее» в разговоре
+    звучит часто, а справочник находит направление в любом месте фразы, и
+    вдвоём они объявляли переход там, где его не было.
+    """
+    place = lowered.find("следующ")
+    if place < 0:
+        return False
+    at_char, name = directory.search(lowered[place:])
+    if not name:
+        # Название раньше самого слова — «Дагестан начнёт работать в апреле
+        # следующего года» — это не объявление, а срок.
+        return False
+    return len(lowered[place:place + at_char].split()) - 1 <= NEXT_GAP
+
+
+def opens_a_review(text: str, directory: "Directory | None" = None) -> bool:
+    """Объявляют ли этой фразой обзор нескольких направлений сразу.
+
+    «Далее остановлюсь на регионах, где обновление парка техники требует
+    особого внимания», «Сегодня подробно остановимся на ходе строительства в
+    таких регионах, как…» — дальше пойдёт перечисление, и каждое направление
+    получит свои полминуты без всякого объявления.
+
+    Считать такую фразу переходом нельзя вдвойне. Своего направления у неё
+    нет, и разметка брала первое попавшееся из соседней фразы: на записи
+    17.09 так Архангельской области достались восемнадцать минут обзора, где
+    речь шла про Карелию, Удмуртию, Волгоград и Тюмень. А названное в ней
+    списком — не переход к первому из списка.
+
+    Узнаётся по единице во множественном числе. Одного этого мало —
+    «в Архангельской области» тоже похоже на множественное, падежей
+    инструмент не знает, — поэтому требуется ещё, чтобы направление в фразе
+    было не одно: ни одного или сразу несколько.
+    """
+    lowered = (text or "").lower()
+    if not _MANY.search(lowered):
+        return False
+    return len(directory.find_all(lowered)) != 1 if directory else False
+
+
+def _beside_a_unit(lowered: str, found: "re.Match") -> bool:
+    """Стоит ли рядом с названием его единица: «области», «край», «филиал».
+
+    Слово до или слово после — падежи в русском ставят его с обеих сторон:
+    «в Архангельской области», «на Республику Карелия».
+    """
+    before = lowered[:found.start()].split()
+    after = _WORD_TAIL.sub("", lowered[found.end():]).split()
+    nearby = before[-1:] + after[:1]
+    return any(
+        word.strip("«»\"' .,!?…—–-").startswith(_ABOUT_A_UNIT)
+        for word in nearby
     )
 
 

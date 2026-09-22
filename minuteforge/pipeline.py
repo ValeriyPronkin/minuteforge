@@ -38,11 +38,10 @@ from .journal import Journal
 from .notes import Note, marks_by_content, split_into_reports, take_notes
 from .vocabulary import read_vocabulary
 from .llm import LLMClient, same_model
-from .assignees import roster_of
+from .assignees import ROOM_WIDE, roster_of
 from .people import Person
 from .protocol import Protocol, build_protocol
 from .tasks import (
-    COLLECTIVE_NAMES,
     asks_for_work,
     extract_tasks,
     use_words,
@@ -437,8 +436,11 @@ def protocol_from_transcript(
     # Поручению, данному всему залу, направление не приписывается: «обращайтесь
     # в головную организацию — все регионы — Пермский край» сужает адресата
     # до одного субъекта, хотя сказано было всем.
+    #
+    # Всему залу — это не всякий круг. Генподрядчик у каждого объекта свой, и
+    # поручение ему без региона не исполнить: спрашивать не с кого.
     tasks = [
-        task if task.who in COLLECTIVE_NAMES
+        task if task.who in ROOM_WIDE
         else replace(task, unit=unit_at(marks, task.at))
         for task in tasks
     ]

@@ -284,3 +284,38 @@ def test_the_roster_stage_runs_and_is_recorded(tmp_path):
     )
     assert [task.who for task in tasks] == ["Белянин Андрей Георгиевич"]
     assert any("описи" in step.title for step in record.steps)
+
+
+# --------------------------------------------------------- круги этого штаба
+
+def test_the_circles_of_this_staff_are_recognised():
+    """Волонтёрам и генподрядчику поручают вслух, и адресат у них есть."""
+    assert circle("волонтёров") == "волонтёры"
+    assert circle("волонтеры") == "волонтёры"
+    assert circle("генподрядной организации") == "генеральный подрядчик"
+    assert circle("Генеральному подрядчику") == "генеральный подрядчик"
+
+
+def test_a_contractor_without_gen_is_not_a_circle():
+    """«Подрядчик отстаёт от графика» звучит в каждом докладе.
+
+    Там речь об одном конкретном подрядчике конкретного объекта, а не о
+    круге исполнителей.
+    """
+    assert circle("подрядчик") == ""
+    assert circle("подрядной организации") == ""
+
+
+def test_only_a_room_wide_circle_gives_up_its_region():
+    """Генподрядчик у каждого объекта свой: без региона с него не спросить.
+
+    Направление снимают только у того поручения, что сказано всему залу, —
+    иначе адресат сужается до одного субъекта.
+    """
+    from minuteforge.assignees import ROOM_WIDE
+
+    assert "все регионы" in ROOM_WIDE
+    assert "региональные штабы" in ROOM_WIDE
+    assert "генеральный подрядчик" not in ROOM_WIDE
+    assert "управляющие компании" not in ROOM_WIDE
+    assert ROOM_WIDE <= COLLECTIVE_NAMES

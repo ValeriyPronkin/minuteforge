@@ -13,13 +13,20 @@ from __future__ import annotations
 import json
 import re
 import time
-from difflib import SequenceMatcher
 from pathlib import Path
 from dataclasses import dataclass, replace
 from typing import Iterable, Sequence
 
 from loguru import logger
 
+from .assignees import (
+    COLLECTIVE,
+    COLLECTIVE_NAMES,
+    circle,
+    Roster,
+    by_roster,
+    same_person,
+)
 from .blocks import UNKNOWN, is_soundcheck
 from .people import PATRONYMIC, is_given_name
 from .chunking import Chunk
@@ -138,6 +145,24 @@ TASKS_SCHEMA = {
     "additionalProperties": False,
 }
 
+def schema_with(assignees: Sequence[str]) -> dict:
+    """Та же схема, но исполнитель в ней выбирается из описи.
+
+    Свободная строка держится только просьбой в промпте, а ``enum`` —
+    грамматикой на сервере: ответа вне описи модель не может составить
+    физически. Пустая строка в описи первая и обязательная: назвать
+    исполнителя есть у кого хорошо если у трети поручений, и список без неё
+    заставил бы приписать адресата каждому.
+    """
+    items = dict(TASKS_SCHEMA["properties"]["tasks"]["items"])
+    items["properties"] = {
+        **items["properties"],
+        "who": {"type": "string", "enum": list(assignees)},
+    }
+    tasks = {**TASKS_SCHEMA["properties"]["tasks"], "items": items}
+    return {**TASKS_SCHEMA, "properties": {**TASKS_SCHEMA["properties"], "tasks": tasks}}
+
+
 _FIELD_ALIASES = {
     "what": ("поручение", "задача", "что сделать", "task"),
     "who": ("кому", "исполнитель", "ответственный", "assignee"),
@@ -209,6 +234,7 @@ def build_prompt(
     json_mode: bool = False,
     extra: str = "",
     base: str = "",
+    assignees: Sequence[str] = (),
 ) -> tuple[str, str]:
     """Собирает пару «системный промпт, текст запроса» для куска.
 
@@ -225,8 +251,19 @@ def build_prompt(
         if named:
             header += f"Участники фрагмента: {', '.join(named)}."
         header += "\n\n"
+    # Опись подаётся вместе с окном, а не в системном указании: в ней
+    # названные здесь же, и на следующем окне она другая.
+    choices = ""
+    listed = [name for name in assignees if name]
+    if listed:
+        choices = (
+            "Исполнителя выбирай из списка, слово в слово. Никто из списка "
+            "не назван — оставь поле пустым.\n"
+            + "\n".join(f"- {name}" for name in listed)
+            + "\n\n"
+        )
     system = base or (EXTRACT_SYSTEM_JSON if json_mode else EXTRACT_SYSTEM)
-    return with_extra(system, extra), f"{header}Стенограмма:\n{chunk.text}"
+    return with_extra(system, extra), f"{header}{choices}Стенограмма:\n{chunk.text}"
 
 
 def with_extra(system: str, extra: str) -> str:
@@ -334,50 +371,6 @@ _NOT_AN_ASSIGNEE = {
     "секретарь совещания",
 }
 
-#: Обращения, за которыми стоит вполне определённый круг исполнителей.
-#:
-#: Раньше они выбрасывались наравне с местоимениями, и половина совещания
-#: уходила в раздел «исполнитель не назван». Это неправда: на штабе, где
-#: собраны все субъекты, «прошу регионы обратить внимание» — поручение всем
-#: регионам, а не поручение в никуда. Его рассылают, по нему спрашивают, и в
-#: протоколе оно должно стоять с адресатом.
-#:
-#: Написание приводится к одному: иначе «регионам», «регионы» и «субъектам»
-#: разъедутся по таблице как три разных исполнителя.
-COLLECTIVE = {
-    "коллеги": "все участники",
-    "уважаемые коллеги": "все участники",
-    "коллегам": "все участники",
-    "участники": "все участники",
-    "участники совещания": "все участники",
-    "присутствующие": "все участники",
-    "все": "все участники",
-    "всем": "все участники",
-    "регионы": "все регионы",
-    "регионам": "все регионы",
-    "региона": "все регионы",
-    "регион": "все регионы",
-    "все регионы": "все регионы",
-    "субъекты": "все регионы",
-    "субъектам": "все регионы",
-    "субъекты российской федерации": "все регионы",
-    "штабы": "региональные штабы",
-    "штаб": "региональные штабы",
-    "региональные штабы": "региональные штабы",
-    "региональным штабам": "региональные штабы",
-    "региональные операторы": "региональные операторы",
-    "регоператоры": "региональные операторы",
-    "рекоператоры": "региональные операторы",
-    "муниципалитеты": "муниципалитеты",
-    "муниципалитетам": "муниципалитеты",
-    "управляющие компании": "управляющие компании",
-    "управляющим компаниям": "управляющие компании",
-    "администрации": "администрации",
-}
-
-#: Как эти исполнители выглядят в протоколе — по ним же их и узнают дальше.
-COLLECTIVE_NAMES = frozenset(COLLECTIVE.values())
-
 #: По этим приметам строка похожа на срок. Модель кладёт в это поле что
 #: угодно — «Завершена», «Отправлено», «Добрый день», — и такой «срок» в
 #: таблице контроля хуже пустого: по нему нельзя ни спросить, ни отсортировать.
@@ -452,10 +445,11 @@ def clean_assignee(who: str, source: str) -> str:
     plain = who.lower().strip(".,")
     if plain in _NOT_AN_ASSIGNEE:
         return ""
-    if plain in COLLECTIVE:
+    named = circle(plain)
+    if named:
         # Круг исполнителей назван, пусть и общим словом. Проверять его по
         # стенограмме незачем: это не фамилия, выдумать его модели негде.
-        return COLLECTIVE[plain]
+        return named
     if len(who.split()) > 6:
         return ""  # это предложение, а не исполнитель
     if not is_russian(who):
@@ -538,35 +532,6 @@ def _without_filler(sentence: str) -> str:
             break
         words = words[1:]
     return " ".join(words)
-
-
-#: Насколько должны совпасть имя и отчество, чтобы это был один человек.
-#: Пороги разные и считаются порознь — целиком строки сравнивать нельзя:
-#: «Андрей Петрович» и «Антон Петрович» совпадают на 0,76, а «Гамзатбек
-#: Ханифович» и «Хамзатбег Кариллович» — на 0,72, хотя первые двое разные
-#: люди, а вторые один и тот же, услышанный дважды по-разному. Различает их
-#: имя: 0,36 против 0,78.
-SAME_GIVEN_NAME = 0.7
-SAME_PATRONYMIC = 0.6
-
-
-def same_person(one: str, other: str) -> bool:
-    """Один ли это человек, названный дважды по-разному.
-
-    Распознавание коверкает имена так, что один ведущий приезжает четырьмя
-    людьми: «Гамзатбек Ханифович», «Хамзатбек Ханифович», «Хамзатбег
-    Кариллович», «Гамзатбек Ганифович». Считать их разными — значит не
-    узнать ведущего ни в одном из написаний.
-    """
-    left, right = (one or "").lower().split(), (other or "").lower().split()
-    if not left or not right:
-        return False
-    if len(left) < 2 or len(right) < 2:
-        return SequenceMatcher(None, " ".join(left), " ".join(right)).ratio() >= 0.85
-    return (
-        SequenceMatcher(None, left[0], right[0]).ratio() >= SAME_GIVEN_NAME
-        and SequenceMatcher(None, left[1], right[1]).ratio() >= SAME_PATRONYMIC
-    )
 
 
 #: Сколько раз должны обратиться к человеку, чтобы счесть его ведущим.
@@ -1277,6 +1242,7 @@ def extract_tasks(
     journal=None,
     directory=None,
     verifier=None,
+    roster: Roster | None = None,
 ) -> list[Task]:
     """Проходит по кускам стенограммы и собирает поручения.
 
@@ -1301,6 +1267,10 @@ def extract_tasks(
     :param directory: справочник направлений. По нему опознаётся обращение
         к организации — «Коллеги Ростовской области, просьба подтвердить»;
         без него такое обращение адресатом не считается.
+    :param roster: опись исполнителей заседания. К ней приводится всё, что
+        попало в графу «Исполнитель»: одного человека и модель, и правило по
+        обращению называют по-разному, и в таблице контроля он становится
+        двумя строками. Пусто — графа остаётся как есть.
     :param journal: куда записать ход разбора по стадиям. Без него видно
         только начало и конец, и «модель не нашла» неотличимо от «нашла, а
         мы отсеяли»: пункта нет в обоих случаях.
@@ -1316,6 +1286,12 @@ def extract_tasks(
     # поздних стадиях полоса стояла полной по несколько минут — выглядело
     # это зависанием, а не работой.
     outline, checking, wording = _stage_shares(settings)
+    closed_assignees = settings is None or getattr(settings, "closed_assignees", True)
+    if roster and closed_assignees:
+        logger.info(
+            "Исполнитель выбирается из описи: {} участников, {} направлений",
+            len(roster.people), len(roster.addressees),
+        )
 
     for position, chunk in enumerate(chunks, 1):
         title = f"Фрагмент {chunk.index} из {chunk.total}"
@@ -1325,17 +1301,28 @@ def extract_tasks(
         ))
 
         started = time.perf_counter()
+        # Опись сужается до окна: называют исполнителя рядом с поручением, а
+        # полторы сотни участников списком не влезают ни в окно, ни в силы
+        # мелкой модели.
+        choices = (
+            roster.options_for(chunk.text, chunk.speakers)
+            if json_mode and roster and closed_assignees else ()
+        )
         system, user = build_prompt(
             chunk,
             json_mode=bool(json_mode),
             extra=getattr(settings, "prompt_extra", "") or "",
             base=_own_prompt(settings),
+            assignees=choices,
         )
+        schema = None
+        if json_mode:
+            schema = schema_with(choices) if choices else TASKS_SCHEMA
         try:
             reply = client.complete(
                 system, user,
                 json_mode=bool(json_mode),
-                schema=TASKS_SCHEMA if json_mode else None,
+                schema=schema,
             )
         except LLMError as exc:
             if not skip_failed:
@@ -1376,7 +1363,7 @@ def extract_tasks(
                     system,
                     f"{user}\n\nВНИМАНИЕ: ответ должен быть на русском языке.",
                     json_mode=bool(json_mode),
-                    schema=TASKS_SCHEMA if json_mode else None,
+                    schema=schema,
                 )
             except LLMError as exc:
                 logger.warning("Повтор не удался: {}", exc)
@@ -1476,6 +1463,24 @@ def extract_tasks(
             f"Срок взят из реплики: {dated}. Пункты при этом не убывают.",
         )
     single = named
+    if roster and single:
+        before = single
+        single = by_roster(single, roster)
+        changed = sum(1 for was, now in zip(before, single) if was.who != now.who)
+        cleared = sum(1 for was, now in zip(before, single) if was.who and not now.who)
+        if changed:
+            logger.info(
+                "Исполнитель приведён к описи: {} поручений, из них очищено {}",
+                changed, cleared,
+            )
+        if journal is not None:
+            journal.step(
+                "Исполнитель по описи", before, single,
+                why=f"Приведено к записи из описи: {changed}, из них очищено "
+                f"{cleared} — такого исполнителя на заседании нет. Пункты "
+                "при этом не убывают: поручение без исполнителя остаётся "
+                "поручением.",
+            )
     if settings is not None and getattr(settings, "merge_similar", False) and single:
         before = single
         single = merge_similar(single, client, json_mode=bool(json_mode))

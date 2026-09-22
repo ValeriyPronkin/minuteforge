@@ -110,11 +110,11 @@ def like(people: Iterable[Person], name: str) -> Person | None:
     в ФИО она самая устойчивая часть и меньше прочих страдает от
     распознавания.
     """
-    wanted = _surname(name or "").casefold()
+    wanted = surname(name or "").casefold()
     if not wanted:
         return None
     for person in people:
-        if _surname(person.name).casefold() == wanted:
+        if surname(person.name).casefold() == wanted:
             return person
     return None
 
@@ -288,7 +288,7 @@ def mentioned_people(text: str) -> list[Person]:
     found: dict[str, Person] = {}
     for match in _FULL_NAME.finditer(text or ""):
         name = " ".join(match.group(0).split())
-        if not _looks_like_person(name):
+        if not looks_like_person(name):
             continue
         tail = text[match.end():match.end() + 100]
         position = ""
@@ -470,15 +470,15 @@ def merge_suggestions(
     устойчивая часть и меньше страдает от распознавания, чем отчество.
     """
     merged = list(roster)
-    known = {_surname(person.name) for person in roster}
+    known = {surname(person.name) for person in roster}
     for person in mentioned:
-        if _surname(person.name) not in known:
+        if surname(person.name) not in known:
             merged.append(person)
-            known.add(_surname(person.name))
+            known.add(surname(person.name))
     return merged
 
 
-def _looks_like_person(name: str) -> bool:
+def looks_like_person(name: str) -> bool:
     """Похоже ли это на человека, а не на словосочетание.
 
     Признак — имя или отчество среди трёх слов. Без него «Ставка Банка
@@ -491,7 +491,7 @@ def _looks_like_person(name: str) -> bool:
     )
 
 
-def _surname(name: str) -> str:
+def surname(name: str) -> str:
     """Фамилия из ФИО, как её ни напиши.
 
     Она стоит либо первой, либо последней: «Семенов Алексей Валерьевич» и
@@ -526,14 +526,14 @@ def canonical(name: str, people: Iterable[Person]) -> str:
     Наталий на совещании бывает несколько. Если подошли двое, имя остаётся
     как есть: поставить не того хуже, чем оставить непричёсанное.
     """
-    stems = _stems(name)
-    if len(stems) < 2:
+    said = stems(name)
+    if len(said) < 2:
         return name
-    found = [person for person in people if len(stems & _stems(person.name)) >= 2]
+    found = [person for person in people if len(said & stems(person.name)) >= 2]
     return found[0].name if len(found) == 1 else name
 
 
-def _stems(name: str) -> set[str]:
+def stems(name: str) -> set[str]:
     """Слова имени без падежных окончаний.
 
     «Огородникова» и «Огородниковой» — один человек, а точное сравнение их

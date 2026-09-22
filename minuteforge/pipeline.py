@@ -38,6 +38,7 @@ from .journal import Journal
 from .notes import Note, marks_by_content, split_into_reports, take_notes
 from .vocabulary import read_vocabulary
 from .llm import LLMClient, same_model
+from .assignees import roster_of
 from .people import Person
 from .protocol import Protocol, build_protocol
 from .tasks import (
@@ -411,10 +412,25 @@ def protocol_from_transcript(
             "доклады не на что разложить."
         )
 
+    # Опись исполнителей: кого на этом заседании вообще можно назначить.
+    # Собирается из реестра участников и третьей колонки справочника —
+    # обоих может не быть, и тогда опись ничего не запирает.
+    roster = roster_of(meeting.people, units, voices=named.speakers)
+    if roster.people:
+        logger.info(
+            "Исполнителей в описи: {} участников и {} направлений",
+            len(roster.people), len(roster.addressees),
+        )
+    else:
+        logger.warning(
+            "Реестра участников нет: исполнителя не с чем сверить, и в графе "
+            "останется то, как его назвала модель."
+        )
+
     tasks = extract_tasks(
         chunks, client, progress=progress, answers=answers,
         corpus=named.as_text(), chair=chair, journal=record, directory=units,
-        verifier=checker,
+        verifier=checker, roster=roster,
     )
     logger.info("Найдено поручений: {}", len(tasks))
 

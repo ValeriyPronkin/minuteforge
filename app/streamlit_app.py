@@ -80,10 +80,6 @@ _spec = _ilu.spec_from_file_location("prepare_meeting", _prep_path)
 prep = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(prep)
 
-# Накопительный справочник людей и постоянный глоссарий лежат в data/vks: там же,
-# где заседания, и под общим запретом в .gitignore — в них настоящие ФИО.
-VKS_DIR = Path(__file__).resolve().parent.parent / "data" / "vks"
-GLOSSARY = VKS_DIR / "glossary.md"
 from minuteforge.checks import suspicious  # noqa: E402
 from minuteforge.transcribe import (  # noqa: E402
     MissingToken,
@@ -100,6 +96,16 @@ WORK_DIR = (
 )
 INPUT_DIR = Path(BASE.input_dir) if Path(BASE.input_dir).is_absolute() else ROOT / BASE.input_dir
 OUTPUT_DIR = Path(BASE.output_dir) if Path(BASE.output_dir).is_absolute() else ROOT / BASE.output_dir
+
+# Папка заседаний — общая, и потому настройка, а не путь внутри проекта:
+# файлы в неё кладёт секретарь, результат оттуда забирает он же. Здесь же
+# лежат накопительный справочник людей и постоянный глоссарий — в них
+# настоящие ФИО, и потому в рабочей папке они закрыты .gitignore целиком.
+VKS_DIR = (
+    Path(BASE.meetings_dir) if Path(BASE.meetings_dir).is_absolute()
+    else ROOT / BASE.meetings_dir
+)
+GLOSSARY = VKS_DIR / "glossary.md"
 
 #: Что считаем записью совещания при выборе файла с диска.
 MEDIA_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v", ".wav", ".m4a", ".mp3"}
@@ -174,6 +180,26 @@ def _materials_near(file: Path | None) -> tuple[Path | None, list[Path]]:
     return here, []
 
 
+def _is_meeting(folder: Path) -> bool:
+    """Папка заседания это или обычная."""
+    return any((folder / mark).is_dir() for mark in _MEETING_MARKS)
+
+
+def runs_root(out_dir: Path) -> Path:
+    """Куда положить папку прогона.
+
+    В папке заседания прогоны лежат в «runs», а не вперемешку с эталонными
+    файлами: заседание — это документы секретаря и подписанный протокол,
+    прогон — черновик машины, и путать их нельзя. Раньше прогон ложился в
+    корень, а в «runs» его переносили руками — лишний перенос это лишняя
+    возможность положить не туда.
+
+    Папка не заседания — перевалочная, складывать там не во что, и прогон
+    лежит сам по себе.
+    """
+    return out_dir / "runs" if _is_meeting(out_dir) else out_dir
+
+
 def _materials_in(folder: Path) -> list[Path]:
     """Документы секретаря по заседанию.
 
@@ -194,12 +220,16 @@ def pick_file_dialog(
     title: str = "Выберите запись совещания",
     kinds: str = "Видео и аудио",
     masks: str = "*.mp4 *.avi *.mov *.mkv *.webm *.wav *.m4a *.mp3",
+    start: Path | None = None,
 ) -> str | None:
     """Открывает обычный системный диалог выбора файла.
 
     :param title, kinds, masks: что выбираем. Диалог зовут и за записью, и за
         готовой стенограммой, а фильтр у них разный: со списком видеофайлов
         json просто не виден, и человек решает, что выбрать нечего.
+    :param start: с какой папки открыться. Заседания лежат на общем диске, и
+        без этого диалог каждый раз начинает с того места, которое запомнила
+        система, — обычно с «Загрузок», откуда до сетевой папки далеко.
 
     Браузер путь к файлу не отдаёт и отдать не может — это его устройство,
     страница не должна знать, что лежит на диске. Поэтому загрузка через
@@ -213,6 +243,9 @@ def pick_file_dialog(
     Диалог запускается отдельным процессом: tkinter не любит, когда его
     зовут из потока streamlit, и на macOS от этого просто виснет.
     """
+    # Пустая строка для tkinter означает «как обычно»: недоступная сетевая
+    # папка не должна мешать выбрать файл с локального диска.
+    where = str(start) if start is not None and start.exists() else ""
     code = (
         "import tkinter as tk\n"
         "from tkinter import filedialog\n"
@@ -221,6 +254,7 @@ def pick_file_dialog(
         "root.attributes('-topmost', True)\n"
         "print(filedialog.askopenfilename(\n"
         f"    title={title!r},\n"
+        f"    initialdir={where!r},\n"
         f"    filetypes=[({kinds!r}, {masks!r}),\n"
         "               ('Все файлы', '*.*')]))\n"
     )
@@ -353,11 +387,31 @@ def prepare_materials(paths, uploads) -> list[str]:
 with st.sidebar:
     st.header("Запись")
 
+    # Заседания лежат на общем диске, и он отваливается молча: буква не
+    # подключена в этом сеансе, сервер недоступен, папку переименовали.
+    # Сказать об этом надо до выбора файла, а не после сорока минут работы.
+    if VKS_DIR.exists():
+        st.caption(f"Заседания: `{VKS_DIR}`")
+    else:
+        st.warning(
+            f"Папка заседаний не найдена: `{VKS_DIR}`. Если это общий диск — "
+            "подключён ли он сейчас? Путь задаётся настройкой `meetings_dir`."
+        )
+
+    # С какой папки открывать диалоги. Обычно работают с тем же заседанием,
+    # что и минуту назад, — с него и начинаем; а в первый раз за сеанс — с
+    # папки заседаний, иначе диалог открывается в «Загрузках», откуда до
+    # сетевой папки десяток щелчков.
+    _taken = st.session_state.get("meeting_source")
+    START_DIR = (
+        Path(_taken).parent if _taken and Path(_taken).exists() else VKS_DIR
+    )
+
     # Выбор файла системным диалогом: запись остаётся на месте, расчёт
     # читает её оттуда. Загрузка через браузер оставлена запасным путём —
     # она копирует гигабайты и нужна, только если запись на другой машине.
     if st.button("Выбрать файл…", **full_width()):
-        chosen = pick_file_dialog()
+        chosen = pick_file_dialog(start=START_DIR)
         if chosen:
             st.session_state["source_path"] = chosen
 
@@ -405,6 +459,7 @@ with st.sidebar:
             title="Выберите готовую стенограмму",
             kinds="Стенограмма",
             masks="*.json",
+            start=START_DIR,
         )
         if chosen:
             st.session_state["segments_path"] = chosen
@@ -1069,7 +1124,7 @@ if source_path is not None or uploaded is not None:
             # Метка считается один раз: посчитанная второй, она разошлась бы
             # с именем папки на минуту.
             tag = run_tag(meeting, models=heard_by)
-            folder = run_dir(out_dir, source.stem, tag=tag)
+            folder = run_dir(runs_root(out_dir), source.stem, tag=tag)
             st.session_state["run_dir"] = folder
             saved = save_transcript(transcript, folder, stem=f"{tag}_стенограмма")
             st.session_state["saved_transcript"] = saved
@@ -1359,7 +1414,7 @@ if st.button("Собрать протокол", type="primary"):
     tag = run_tag(meeting, models=made_by)
     stem = f"{tag}_протокол"
     folder = st.session_state.get("run_dir") or run_dir(
-        out_dir, st.session_state.get("stem", "совещание"), tag=tag
+        runs_root(out_dir), st.session_state.get("stem", "совещание"), tag=tag
     )
     st.session_state["run_dir"] = folder
     if template_text is None:

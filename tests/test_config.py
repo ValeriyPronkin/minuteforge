@@ -81,3 +81,18 @@ def test_title_can_be_renamed_for_the_organisation():
     ничего не говорит."""
     assert Settings().app_title == "minuteforge"
     assert Settings(app_title="Протоколы совещаний").app_title == "Протоколы совещаний"
+
+
+def test_meetings_folder_can_live_outside_the_app(tmp_path):
+    """Папка заседаний общая: файлы в неё кладёт секретарь, результат забирает он же.
+
+    Значит, путь к ней может быть каким угодно, в том числе сетевым, — и
+    прежнее место внутри приложения остаётся лишь умолчанием.
+    """
+    from pathlib import Path
+
+    assert str(Settings().meetings_dir) == "data/vks"
+
+    own = tmp_path / "config.yaml"
+    own.write_text("meetings_dir: /общая/ВКС\n", encoding="utf-8")
+    assert Path(str(Settings.load(own).meetings_dir)).is_absolute()

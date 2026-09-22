@@ -28,6 +28,28 @@ W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
 S = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
 
 
+def meetings_dir():
+    """Папка заседаний — та, что задана настройкой ``meetings_dir``.
+
+    Скрипт зовут и из приложения, и руками из консоли, и настройки при этом
+    читаются те же самые: заседания переехали на общий диск — переехал и
+    глоссарий, отдельно о нём помнить не надо. Настройки не прочлись —
+    остаётся прежнее место, рядом с приложением.
+    """
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    where = os.path.join('data', 'vks')
+    try:
+        sys.path.insert(0, repo)
+        from minuteforge.config import Settings, CONFIG_FILE, CONFIG_EXAMPLE
+        own = os.path.join(repo, CONFIG_FILE)
+        where = str(Settings.load(
+            own if os.path.exists(own) else os.path.join(repo, CONFIG_EXAMPLE)
+        ).meetings_dir)
+    except Exception:
+        pass
+    return where if os.path.isabs(where) else os.path.join(repo, where)
+
+
 def docx_to_text(path):
     z = zipfile.ZipFile(path)
     root = ET.fromstring(z.read('word/document.xml'))
@@ -325,17 +347,18 @@ def main():
     ap.add_argument('src', help='папка с файлами секретаря')
     ap.add_argument('-o', '--out', default=None, help='папка вывода (по умолчанию <src>/prep)')
     ap.add_argument('-g', '--glossary', default=None,
-                    help='постоянный глоссарий (по умолчанию data/vks/glossary.md)')
+                    help='постоянный глоссарий (по умолчанию glossary.md в папке заседаний)')
     ap.add_argument('--budget', type=int, default=550,
                     help='лимит initial_prompt в символах (whisper режет по ~224 токенам)')
     a = ap.parse_args()
     out = a.out or os.path.join(a.src, 'prep')
     os.makedirs(out, exist_ok=True)
-    # Глоссарий держит настоящие ФИО, поэтому по умолчанию он ищется в data/vks —
-    # эта папка целиком под запретом в .gitignore. Рядом со скриптом (scripts/)
-    # ему не место: та папка отслеживается, и файл уехал бы в публичный репозиторий.
-    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    gpath = a.glossary or os.path.join(repo, 'data', 'vks', 'glossary.md')
+    # Глоссарий держит настоящие ФИО, поэтому лежит он там же, где заседания:
+    # внутри приложения эта папка целиком под запретом в .gitignore, а на общем
+    # диске за доступом к ней следит тот, кто раздаёт права. Рядом со скриптом
+    # (scripts/) ему не место: та папка отслеживается, и файл уехал бы в
+    # публичный репозиторий.
+    gpath = a.glossary or os.path.join(meetings_dir(), 'glossary.md')
     sections, prose = load_glossary(gpath)
     if sections:
         print('глоссарий %s — %d разделов, %d терминов'

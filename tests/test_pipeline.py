@@ -832,3 +832,54 @@ def test_without_models_the_name_is_as_before():
     from minuteforge.pipeline import run_tag
 
     assert run_tag("03.09.2026", datetime(2026, 9, 10, 17, 20)) == "2026-09-03_1720"
+
+
+# ------------------------------------------- стенограмма заседания
+
+def test_the_meeting_transcript_is_put_beside_the_meeting(tmp_path):
+    """Переименовывать руками секретарь не будет — и не должен.
+
+    В папке прогона стенограмма подписана меткой прогона, а заседанию нужна
+    одна, под общим именем: по ней считают мерки и пересобирают протокол.
+    """
+    from minuteforge.pipeline import keep_as_reference
+
+    meeting = tmp_path / "2026-09-10"
+    run = meeting / "runs" / "прогон"
+    run.mkdir(parents=True)
+    files = {
+        "json": run / "2026-09-10_1814_large-v3_стенограмма.json",
+        "text": run / "2026-09-10_1814_large-v3_стенограмма.txt",
+    }
+    files["json"].write_text('{"model": "large-v3"}', encoding="utf-8")
+    files["text"].write_text("Распознано моделью large-v3\n", encoding="utf-8")
+
+    kept = keep_as_reference(files, meeting)
+
+    assert sorted(p.name for p in kept.values()) == [
+        "стенограмма.json", "стенограмма.txt",
+    ]
+    assert (meeting / "стенограмма.json").read_text(encoding="utf-8") == (
+        '{"model": "large-v3"}'
+    )
+
+
+def test_the_meeting_transcript_is_never_replaced(tmp_path):
+    """Какой расшифровке быть стенограммой заседания, решает человек.
+
+    Ту же запись расшифровывают по нескольку раз, и вторая бывает хуже
+    первой. Молчаливая замена испортила бы и мерки — они считаются от этого
+    файла.
+    """
+    from minuteforge.pipeline import keep_as_reference
+
+    meeting = tmp_path / "2026-09-10"
+    meeting.mkdir()
+    (meeting / "стенограмма.json").write_text("своя, выбранная", encoding="utf-8")
+    source = tmp_path / "2026-09-10_1900_medium_стенограмма.json"
+    source.write_text("вторая расшифровка", encoding="utf-8")
+
+    assert keep_as_reference({"json": source}, meeting) == {}
+    assert (meeting / "стенограмма.json").read_text(encoding="utf-8") == (
+        "своя, выбранная"
+    )

@@ -720,6 +720,60 @@ def save_transcript(
     return {"text": text, "json": data}
 
 
+#: Как стенограмма называется в папке заседания: без метки прогона и без
+#: модели. Файл один на заседание — тот, по которому считают мерки и
+#: пересобирают протокол, не распознавая заново.
+REFERENCE_STEM = "стенограмма"
+
+
+def keep_as_reference(
+    files: dict[str, Path], meeting_dir: str | Path
+) -> dict[str, Path]:
+    """Кладёт стенограмму в папку заседания под общим именем.
+
+    В папке прогона она подписана меткой прогона — день ВКС, час расчёта,
+    модель, — и это правильно: расшифровки large-v3 и medium различаются
+    фамилиями и цифрами, а по голому имени этого потом не узнать. Но у того
+    же файла есть вторая роль: стенограмма заседания, одна на заседание.
+    Прежде её переносили и переименовывали руками, а руками это делают через
+    раз — и заседание оставалось без стенограммы, хотя расшифровка была.
+
+    Уже лежащую не трогаем никогда, и это главное в этой работе. Какой
+    расшифровке быть стенограммой заседания, решает человек: ту же запись
+    расшифровывают по нескольку раз, и вторая бывает хуже первой. Молчаливая
+    замена испортила бы заодно и мерки — они считаются от этого файла.
+
+    Чем сделан файл, видно и без имени: модель записана внутри json и первой
+    строкой текстовой стенограммы.
+
+    :return: что скопировано. Пусто — стенограмма заседания уже была.
+    """
+    folder = Path(meeting_dir).expanduser().resolve()
+    if (folder / f"{REFERENCE_STEM}.json").exists():
+        logger.info(
+            "Стенограмма заседания в {} уже есть — оставлена как была",
+            folder.name,
+        )
+        return {}
+    folder.mkdir(parents=True, exist_ok=True)
+    copied: dict[str, Path] = {}
+    for kind, source in (files or {}).items():
+        source = Path(source) if source else None
+        if source is None or not source.exists():
+            continue
+        target = folder / f"{REFERENCE_STEM}{source.suffix}"
+        if target.exists():
+            continue
+        shutil.copy2(source, target)
+        copied[kind] = target
+    if copied:
+        logger.info(
+            "Стенограмма заседания положена в {}: {}",
+            folder.name, ", ".join(sorted(p.name for p in copied.values())),
+        )
+    return copied
+
+
 def save(
     protocol: Protocol,
     out_dir: str | Path,

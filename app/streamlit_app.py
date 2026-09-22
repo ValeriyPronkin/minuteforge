@@ -59,6 +59,7 @@ from minuteforge.pipeline import (  # noqa: E402
     clear_cache,
     protocol_from_transcript,
     _free_name,
+    keep_as_reference,
     _text_with_head,
     recorded_when,
     models_tag,
@@ -1128,6 +1129,19 @@ if source_path is not None or uploaded is not None:
             st.session_state["run_dir"] = folder
             saved = save_transcript(transcript, folder, stem=f"{tag}_стенограмма")
             st.session_state["saved_transcript"] = saved
+            # У того же файла вторая роль: стенограмма заседания, одна на
+            # заседание — её выбирают, когда пересобирают протокол, и от неё
+            # же считают мерки. Прежде её переносили и переименовывали
+            # руками, а руками это делают через раз.
+            if _is_meeting(out_dir):
+                kept = keep_as_reference(saved, out_dir)
+                st.caption(
+                    f"Стенограмма заседания положена в `{out_dir.name}`."
+                    if kept else
+                    f"Стенограмма заседания в `{out_dir.name}` уже была — "
+                    "оставлена как есть. Заменить её может только человек: "
+                    "вторая расшифровка бывает хуже первой."
+                )
         except MissingToken as exc:
             st.error(str(exc))
             st.caption(

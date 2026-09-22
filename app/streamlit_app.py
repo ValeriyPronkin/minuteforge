@@ -135,32 +135,59 @@ def full_width() -> dict:
 #: одного этажа: стенограмма и протокол ложатся в свою папку прогона внутри
 #: папки заседания, а выше неё — уже все заседания разом, и чужие материалы
 #: там попались бы наверняка.
-_UP = 1
+#: На сколько этажей подниматься в поисках заседания. Стенограмма прошлого
+#: прогона лежит в «<заседание>/runs/<прогон>/» — это два этажа, а не один,
+#: как было, пока прогоны лежали в папке заседания прямо.
+_UP = 2
+
+#: Чем папка заседания отличается от любой другой: в ней заведено своё
+#: хозяйство. «secretary» — присланное секретарём, «prep» — посчитанное до
+#: совещания, «runs» — прогоны.
+_MEETING_MARKS = ("secretary", "prep", "runs")
 
 
 def _materials_near(file: Path | None) -> tuple[Path | None, list[Path]]:
     """Папка заседания и материалы секретаря в ней.
 
-    Ищутся от файла вверх: рядом с записью они лежат прямо, а рядом со
-    стенограммой — этажом выше, потому что она сама лежит в папке прогона.
-    Возвращается та папка, где материалы нашлись, а не нашлись нигде — та, с
-    которой начали: человеку надо сказать, куда их класть.
+    Заседание узнаётся по своему хозяйству, а не по материалам: с тех пор
+    как присланное переехало в «secretary», в самой папке заседания docx не
+    лежит, и поиск по ним уводил этажом ниже — в «runs» или прямо в папку
+    прошлого прогона, куда потом ложился и результат.
+
+    Примет не нашлось — остаётся прежнее правило: папка, где лежат docx и
+    xlsx. Нет и их — та, с которой начали: человеку надо сказать, куда их
+    класть.
     """
     if file is None:
         return None, []
     here = file.parent
-    for step in range(_UP + 1):
-        folder = here if step == 0 else here.parents[step - 1]
+    folders = [here, *list(here.parents)[:_UP]]
+    for folder in folders:
+        if any((folder / mark).is_dir() for mark in _MEETING_MARKS):
+            return folder, _materials_in(folder)
+    for folder in folders:
         if not folder.exists():
             break
-        found = sorted(
-            path for path in folder.glob("*")
-            if path.suffix.lower() in (".docx", ".xlsx")
-            and not path.name.startswith("~$")
-        )
+        found = _materials_in(folder)
         if found:
             return folder, found
     return here, []
+
+
+def _materials_in(folder: Path) -> list[Path]:
+    """Документы секретаря по заседанию.
+
+    Присланное лежит в «secretary», а у заседаний, разложенных до этой
+    раскладки, — прямо в папке. Смотрим оба места: старые заседания никуда
+    не делись.
+    """
+    return sorted(
+        path
+        for place in (folder, folder / "secretary") if place.is_dir()
+        for path in place.glob("*")
+        if path.suffix.lower() in (".docx", ".xlsx")
+        and not path.name.startswith("~$")
+    )
 
 
 def pick_file_dialog(
@@ -382,6 +409,11 @@ with st.sidebar:
         if chosen:
             st.session_state["segments_path"] = chosen
             st.session_state.pop("segments_taken", None)
+            # Стенограмма выбрана — по ней и пойдёт разбор, её заседание и
+            # считается текущим. Записывается здесь, а не там, где файл
+            # читается: сайдбар считает папку раньше, и иначе она отставала
+            # бы на одно нажатие.
+            st.session_state["meeting_source"] = chosen
 
     segments_path: Path | None = None
     stored_segments = st.session_state.get("segments_path")
@@ -409,8 +441,31 @@ with st.sidebar:
     #
     # Для записи из data/input этого не делаем: там перевалочная папка, а не
     # заседание, и складывать протоколы в неё незачем.
-    beside = source_path or segments_path
+    # Папка заседания идёт от того файла, из которого взялась стенограмма в
+    # памяти: она и есть предмет разбора. Прежде брали запись, а нет записи —
+    # стенограмму, и выбор записи переживал смену заседания: протокол
+    # 10 сентября лёг в папку 17-го, разобранный при этом по правильной
+    # стенограмме — та пришла готовым файлом из своей папки.
+    taken = st.session_state.get("meeting_source")
+    beside = Path(taken) if taken and Path(taken).exists() else None
+    if beside is None:
+        beside = source_path or segments_path
     meeting_dir, materials = _materials_near(beside)
+
+    # Выбранная запись и стенограмма в памяти бывают из разных заседаний:
+    # выбор остаётся в памяти приложения, а разбирают то, что в ней лежит.
+    # Молчать об этом нельзя — прежде расхождение обнаруживалось по тому,
+    # в какой папке нашёлся готовый протокол.
+    if source_path is not None and beside != source_path:
+        chosen_dir, _ = _materials_near(source_path)
+        if chosen_dir is not None and meeting_dir is not None and chosen_dir != meeting_dir:
+            st.warning(
+                f"Выбрана запись из «{chosen_dir.name}», а разбор пойдёт по "
+                f"стенограмме из «{meeting_dir.name}» — туда же ляжет "
+                "результат. Нажмите «Распознать», чтобы считать выбранную "
+                "запись, или выберите стенограмму её заседания."
+            )
+
     if meeting_dir in (INPUT_DIR, None):
         meeting_dir = None
 
@@ -904,6 +959,10 @@ if segments_path is not None and not st.session_state.get("segments_taken"):
 elif ready_segments is not None:
     loaded = json.load(ready_segments)
     came_from = ready_segments.name
+    # Стенограмма пришла через браузер: пути у неё нет, а значит нет и папки
+    # заседания. Прежнее заседание при этом должно забыться — иначе протокол
+    # с чужой машины ляжет в чужую папку.
+    st.session_state.pop("meeting_source", None)
 
 if loaded is not None:
     # Наши файлы помнят, чем распознаны; сохранённые прежними версиями —
@@ -976,6 +1035,9 @@ if source_path is not None or uploaded is not None:
         st.session_state["cache_dir"] = cache_dir_for(
             source, WORK_DIR, start=from_time or None, end=to_time or None
         )
+        # Считаем эту запись — её заседание и становится текущим: прежняя
+        # стенограмма в памяти сейчас сменится на её собственную.
+        st.session_state["meeting_source"] = str(source)
         # Видеопамять освобождается до первого шага: языковая модель висит в
         # ней ещё пять минут после прошлого разбора, и распознавание начнётся
         # на остатках — с ужатой порцией и расшифровкой похуже. Молча.

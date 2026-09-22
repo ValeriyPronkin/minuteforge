@@ -76,10 +76,20 @@ from minuteforge import LOADED_REVISION, disk_revision  # noqa: E402
 # ради одного модуля зависимость пакета от папки со вспомогательными скриптами.
 import importlib.util as _ilu  # noqa: E402
 
-_prep_path = Path(__file__).resolve().parent.parent / "scripts" / "prepare_meeting.py"
-_spec = _ilu.spec_from_file_location("prepare_meeting", _prep_path)
-prep = _ilu.module_from_spec(_spec)
-_spec.loader.exec_module(prep)
+def _script(name: str):
+    """Модуль из scripts/ по пути — они не часть пакета."""
+    path = Path(__file__).resolve().parent.parent / "scripts" / f"{name}.py"
+    spec = _ilu.spec_from_file_location(name, path)
+    module = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+prep = _script("prepare_meeting")
+# Список участников рассылают и таблицей, и pdf — что кому удобнее. Разбор
+# pdf написан давно и лежал отдельным скриптом: список из него собирали
+# руками и клали в папку готовым файлом. Руками — значит не всегда.
+from_pdf = _script("people_from_pdf")
 
 from minuteforge.checks import suspicious  # noqa: E402
 from minuteforge.transcribe import (  # noqa: E402
@@ -210,6 +220,12 @@ ROSTER_NAME = "участники.csv"
 #: смотрим — иначе протокол прошлого прогона вернётся как материал.
 _OURS = ("runs", "prep")
 
+#: Подписанный протокол лежит в папке заседания наравне с присланным, но
+#: материалом не является: он не вход, а выход, и по нему сверяют разбор.
+#: Попав в материалы, он уходил моделью в тезисы — то есть в подсказку
+#: распознаванию попадал готовый ответ.
+_NOT_MATERIALS = ("протокол",)
+
 
 def _materials_in(folder: Path) -> list[Path]:
     """Документы секретаря по заседанию.
@@ -240,8 +256,9 @@ def _materials_in(folder: Path) -> list[Path]:
         path
         for place in places if place.is_dir()
         for path in place.glob("*")
-        if path.suffix.lower() in (".docx", ".xlsx")
+        if path.suffix.lower() in (".docx", ".xlsx", ".pdf")
         and not path.name.startswith("~$")
+        and not path.stem.lower().startswith(_NOT_MATERIALS)
     )
 
 
@@ -383,6 +400,15 @@ def prepare_materials(paths, uploads) -> list[str]:
                     names.append(name)
                 elif path.suffix.lower() == ".xlsx":
                     people.extend(prep.roster(prep.xlsx_rows(path)))
+                elif path.suffix.lower() == ".pdf":
+                    # Разбор нарочно строгий: участник — это «12. ФАМИЛИЯ»
+                    # прописными, следом имя с отчеством. Подписанный
+                    # протокол, лежащий в той же папке, так не устроен и
+                    # даёт ноль человек, а не мусор в списке.
+                    people.extend(
+                        (one["org"], f"{one['surname']} {one['given']}", one["position"])
+                        for one in from_pdf.read_people(from_pdf.read_lines(path))
+                    )
             except Exception as err:  # из почты файл приходит и битым
                 report.append(f"{name}: не разобран — {err}")
 
@@ -1022,9 +1048,10 @@ with st.expander("Что нужно сделать"):
     st.markdown(
         """
 **До совещания — секретарю.** Завести папку заседания в общей папке и
-положить в неё присланное: тезисы (docx) и выгрузку формы регистрации
-(xlsx). Можно прямо в папку заседания, можно в подпапку — **название
-подпапки не важно**, файлы найдутся в любой.
+положить в неё присланное как есть: тезисы и список участников. Формат не
+важен — **docx, xlsx и pdf разбираются одинаково**, переделывать присланное
+не нужно. Можно прямо в папку заседания, можно в подпапку — **название
+подпапки тоже не важно**, файлы найдутся в любой.
 
 **Дальше — по порядку.**
 
@@ -1071,7 +1098,7 @@ with st.expander("Как это работает"):
 
 | что | где | кто кладёт |
 |---|---|---|
-| присланное секретарём (docx, xlsx) | папка заседания или любая её подпапка | секретарь |
+| присланное секретарём (docx, xlsx, pdf) | папка заседания или любая её подпапка | секретарь |
 | список участников — `участники.csv` | папка заседания | сам, из выгрузки формы; лежащий не переписывается |
 | стенограмма заседания — `стенограмма.json` | папка заседания | сам, после распознавания; лежащая не переписывается |
 | прогоны | `runs`, каждый в своей папке | сам |

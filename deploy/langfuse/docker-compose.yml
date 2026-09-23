@@ -1,0 +1,116 @@
+# Langfuse для разбора протоколов: сборка под свой сервер приложений.
+#
+# Отличается от той, что лежит в репозитории Langfuse, двумя вещами.
+#
+# Postgres здесь не поднимается: он у вас уже есть, и адрес его задаётся в
+# .env. База должна существовать до первого запуска — схему приложение
+# создаст само, а базу нет.
+#
+# Отправка статистики выключена. Данных совещаний в ней нет, но обещание
+# «ничего не уходит из контура» есть обещание, да и на машине организации
+# исходящий трафик из ниоткуда порождает лишние вопросы.
+#
+# Всё остальное — четыре обязательных части: ClickHouse (трассы и оценки),
+# Redis (очередь), хранилище объектов и два контейнера самого Langfuse.
+#
+#   cp .env.example .env    # и заполнить
+#   docker compose up -d
+#
+# Интерфейс поднимется на :3000. Ставить это на машину с видеокартой не
+# нужно и не стоит: к модели Langfuse не обращается, а память и диск
+# отнимет у распознавания.
+
+services:
+  langfuse-worker:
+    image: docker.langfuse.com/langfuse/langfuse-worker:4
+    restart: always
+    depends_on:
+      - redis
+      - clickhouse
+      - minio
+    environment: &langfuse-env
+      DATABASE_URL: ${DATABASE_URL}
+      SALT: ${SALT}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      TELEMETRY_ENABLED: "false"
+
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: ${REDIS_PASSWORD}
+
+      # Хранилище сырых событий. По умолчанию — свой minio рядом; чтобы
+      # отдать это вашему хранилищу, поменяйте адрес и ключи в .env, а
+      # службу minio ниже уберите.
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: ${S3_BUCKET}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: ${S3_ENDPOINT}
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+
+  langfuse-web:
+    image: docker.langfuse.com/langfuse/langfuse:4
+    restart: always
+    depends_on:
+      - langfuse-worker
+    ports:
+      # Наружу — только интерфейс. Остальное слушает внутреннюю сеть докера.
+      - "3000:3000"
+    environment:
+      <<: *langfuse-env
+      # Адрес, по которому интерфейс открывают из сети организации. Не
+      # localhost: по localhost он откроется только на самом сервере, а
+      # ссылки в письмах и переходы после входа сломаются.
+      NEXTAUTH_URL: ${LANGFUSE_URL}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+
+  clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:25.12
+    restart: always
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+
+  redis:
+    image: docker.io/redis:7
+    restart: always
+    command: >
+      --requirepass ${REDIS_PASSWORD}
+
+  # Хранилище объектов. Если у вас есть своё, S3-совместимое, — эту службу
+  # уберите целиком и укажите его адрес в .env. Проверить просто: своё
+  # годится, если у него есть ключ доступа и секрет, а не сетевая папка с
+  # доменными правами. Сетевая папка не годится — нужен именно S3.
+  minio:
+    image: docker.io/minio/minio:latest
+    restart: always
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server /data --console-address ":9001"'
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
+    volumes:
+      - langfuse_minio_data:/data
+
+volumes:
+  langfuse_clickhouse_data:
+    driver: local
+  langfuse_clickhouse_logs:
+    driver: local
+  langfuse_minio_data:
+    driver: local

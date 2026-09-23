@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 import requests
 from loguru import logger
 
+from . import tracing
 from .config import LLM_KEY_ENV, Settings
 
 
@@ -164,12 +165,20 @@ class LLMClient:
         max_tokens: int | None = None,
         json_mode: bool = False,
         schema: dict | None = None,
+        stage: str = "",
+        about: dict | None = None,
     ) -> Reply:
         """Задаёт модели один вопрос и возвращает ответ.
 
         Повтор делается только для сбоев, которые бывают временными:
         таймаут и ошибка сервера. Отказ вида «нет такой модели» повторять
         бессмысленно — он повторится ровно так же, только время уйдёт.
+
+        :param stage: какая стадия разбора спрашивает — «выписка»,
+            «проверка», «отмеченное». Нужно трассировке: без этого триста
+            запросов прогона в ней неразличимы.
+        :param about: что ещё записать о запросе: номер окна, длину описи.
+            В расчёте не участвует, и потому словарём, а не полями.
         """
         payload = {
             "model": self.settings.llm_model,
@@ -192,83 +201,98 @@ class LLMClient:
                 "type": "json_object"
             }
 
-        last_error: Exception | None = None
-        for attempt in range(1, self.settings.llm_retries + 2):
-            started = time.perf_counter()
-            try:
-                response = self._session.post(
-                    self.endpoint, json=payload, headers=self._headers(),
-                    timeout=self.settings.llm_timeout_s,
-                )
-            except requests.exceptions.ConnectionError as exc:
-                # Раньше сдавались сразу: «сервер не запущен, сам он не
-                # запустится». Оказалось, что бывает и третье. Ollama
-                # перезапускает рантайм, когда модель не влезла в
-                # видеопамять — а после распознавания её занимает torch, — и
-                # на эти несколько секунд сервер отказывает в соединении.
-                # Со стороны это выглядело как «модель не отвечает», хотя
-                # достаточно подождать.
-                last_error = exc
-                if attempt <= self.settings.llm_retries:
-                    logger.warning(
-                        "Сервер отказал в соединении (попытка {}), жду и повторяю",
-                        attempt,
+        # Наблюдение за запросом. Внутри — весь цикл повторов: трасса
+        # описывает вопрос и ответ, а не каждую попытку достучаться;
+        # попытки — дело связи, и в журнале они уже есть.
+        with tracing.answer(
+            self.settings,
+            name=stage,
+            model=self.settings.llm_model,
+            system=system,
+            user=user,
+            температура=self.settings.llm_temperature,
+            схема=bool(schema),
+            **(about or {}),
+        ) as watched:
+            last_error: Exception | None = None
+            for attempt in range(1, self.settings.llm_retries + 2):
+                started = time.perf_counter()
+                try:
+                    response = self._session.post(
+                        self.endpoint, json=payload, headers=self._headers(),
+                        timeout=self.settings.llm_timeout_s,
                     )
-                    time.sleep(min(3 * attempt, 15))
-                    continue
-                raise LLMUnavailable(
-                    f"Модель не отвечает по адресу {self.settings.llm_base_url}. "
-                    "Запущен ли Ollama или LM Studio и слушает ли он этот порт? "
-                    "Если сервер запущен, ему могло не хватить видеопамяти: "
-                    "проверьте ollama ps — модель должна быть на 100% GPU."
-                ) from exc
-            except requests.exceptions.Timeout as exc:
-                last_error = exc
-                logger.warning(
-                    "Модель не ответила за {} с (попытка {})",
-                    self.settings.llm_timeout_s, attempt,
-                )
-                continue
-
-            if response.status_code in (401, 403):
-                # Повторять нечего: ключ не появится сам.
-                raise LLMError(
-                    f"Сервер модели не принял ключ ({response.status_code}). "
-                    f"Внешние модели требуют ключ в переменной окружения "
-                    f"{LLM_KEY_ENV}; в файл настроек его класть нельзя."
-                )
-            if response.status_code >= 500:
-                last_error = LLMError(f"Сервер модели вернул {response.status_code}")
-                logger.warning("Сервер модели вернул {} (попытка {})", response.status_code, attempt)
-                time.sleep(min(2 ** attempt, 10))
-                continue
-            if response.status_code != 200:
-                if json_mode and response.status_code in (400, 422):
-                    # Уступаем по одной ступени: схему понимают не все
-                    # серверы, «просто JSON» — почти все, а строки понимают
-                    # везде. Терять сразу всё из-за старой версии Ollama
-                    # незачем.
-                    if payload.get("response_format", {}).get("type") == "json_schema":
-                        logger.info("Сервер не понял схему, пробую простой JSON")
-                        payload = {**payload, "response_format": {"type": "json_object"}}
+                except requests.exceptions.ConnectionError as exc:
+                    # Раньше сдавались сразу: «сервер не запущен, сам он не
+                    # запустится». Оказалось, что бывает и третье. Ollama
+                    # перезапускает рантайм, когда модель не влезла в
+                    # видеопамять — а после распознавания её занимает torch, — и
+                    # на эти несколько секунд сервер отказывает в соединении.
+                    # Со стороны это выглядело как «модель не отвечает», хотя
+                    # достаточно подождать.
+                    last_error = exc
+                    if attempt <= self.settings.llm_retries:
+                        logger.warning(
+                            "Сервер отказал в соединении (попытка {}), жду и повторяю",
+                            attempt,
+                        )
+                        time.sleep(min(3 * attempt, 15))
                         continue
-                    logger.info("Сервер не понял строгий JSON, повторяю без него")
-                    # Копией, а не правкой на месте: тот словарь уже ушёл в
-                    # запрос, и менять его задним числом — верный способ
-                    # однажды получить в журнале не то, что было отправлено.
-                    payload = {k: v for k, v in payload.items() if k != "response_format"}
-                    json_mode = False
+                    raise LLMUnavailable(
+                        f"Модель не отвечает по адресу {self.settings.llm_base_url}. "
+                        "Запущен ли Ollama или LM Studio и слушает ли он этот порт? "
+                        "Если сервер запущен, ему могло не хватить видеопамяти: "
+                        "проверьте ollama ps — модель должна быть на 100% GPU."
+                    ) from exc
+                except requests.exceptions.Timeout as exc:
+                    last_error = exc
+                    logger.warning(
+                        "Модель не ответила за {} с (попытка {})",
+                        self.settings.llm_timeout_s, attempt,
+                    )
                     continue
-                raise LLMError(
-                    f"Сервер модели вернул {response.status_code}: "
-                    f"{_short(getattr(response, 'text', ''))}"
-                )
 
-            return _parse(response, time.perf_counter() - started)
+                if response.status_code in (401, 403):
+                    # Повторять нечего: ключ не появится сам.
+                    raise LLMError(
+                        f"Сервер модели не принял ключ ({response.status_code}). "
+                        f"Внешние модели требуют ключ в переменной окружения "
+                        f"{LLM_KEY_ENV}; в файл настроек его класть нельзя."
+                    )
+                if response.status_code >= 500:
+                    last_error = LLMError(f"Сервер модели вернул {response.status_code}")
+                    logger.warning("Сервер модели вернул {} (попытка {})", response.status_code, attempt)
+                    time.sleep(min(2 ** attempt, 10))
+                    continue
+                if response.status_code != 200:
+                    if json_mode and response.status_code in (400, 422):
+                        # Уступаем по одной ступени: схему понимают не все
+                        # серверы, «просто JSON» — почти все, а строки понимают
+                        # везде. Терять сразу всё из-за старой версии Ollama
+                        # незачем.
+                        if payload.get("response_format", {}).get("type") == "json_schema":
+                            logger.info("Сервер не понял схему, пробую простой JSON")
+                            payload = {**payload, "response_format": {"type": "json_object"}}
+                            continue
+                        logger.info("Сервер не понял строгий JSON, повторяю без него")
+                        # Копией, а не правкой на месте: тот словарь уже ушёл в
+                        # запрос, и менять его задним числом — верный способ
+                        # однажды получить в журнале не то, что было отправлено.
+                        payload = {k: v for k, v in payload.items() if k != "response_format"}
+                        json_mode = False
+                        continue
+                    raise LLMError(
+                        f"Сервер модели вернул {response.status_code}: "
+                        f"{_short(getattr(response, 'text', ''))}"
+                    )
 
-        raise LLMError(
-            f"Модель не ответила за {self.settings.llm_retries + 1} попыток: {last_error}"
-        )
+                reply = _parse(response, time.perf_counter() - started)
+                watched.done(reply)
+                return reply
+
+            raise LLMError(
+                f"Модель не ответила за {self.settings.llm_retries + 1} попыток: {last_error}"
+            )
 
     def available_models(self) -> list[str]:
         """Какие модели подняты на сервере.

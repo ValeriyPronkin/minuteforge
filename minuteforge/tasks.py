@@ -1323,6 +1323,9 @@ def extract_tasks(
                 system, user,
                 json_mode=bool(json_mode),
                 schema=schema,
+                stage="выписка",
+                about={"окно": f"{chunk.index} из {chunk.total}",
+                       "исполнителей в списке": len(choices)},
             )
         except LLMError as exc:
             if not skip_failed:
@@ -1364,6 +1367,8 @@ def extract_tasks(
                     f"{user}\n\nВНИМАНИЕ: ответ должен быть на русском языке.",
                     json_mode=bool(json_mode),
                     schema=schema,
+                    stage="выписка (повтор по-русски)",
+                    about={"окно": f"{chunk.index} из {chunk.total}"},
                 )
             except LLMError as exc:
                 logger.warning("Повтор не удался: {}", exc)
@@ -1852,6 +1857,8 @@ def merge_similar(
             MERGE_SYSTEM, listing,
             json_mode=json_mode,
             schema=GROUPS_SCHEMA if json_mode else None,
+            stage="сведение повторов",
+            about={"поручений": len(tasks)},
         )
     except LLMError as exc:
         logger.warning("Свести повторы не удалось, оставляю как есть: {}", exc)
@@ -2044,6 +2051,7 @@ def verify(
                 system, question,
                 json_mode=json_mode,
                 schema=VERDICT_SCHEMA if json_mode else None,
+                stage="проверка «поручение или доклад»",
             )
         except LLMError as exc:
             logger.warning("Проверка пункта не удалась, оставляю: {}", exc)
@@ -2148,6 +2156,7 @@ def rewrite(
                 REWRITE_SYSTEM, question,
                 json_mode=json_mode,
                 schema=REWRITE_SCHEMA if json_mode else None,
+                stage="формулировка по окну",
             )
         except LLMError as exc:
             logger.warning("Переписать пункт не удалось, оставляю: {}", exc)

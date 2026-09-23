@@ -34,6 +34,7 @@ from .chunking import estimate_tokens, split_into_chunks, split_into_windows
 from .config import Settings
 from . import dates
 from .directory import read_directory, at as unit_at
+from . import tracing
 from .journal import Journal
 from .notes import Note, marks_by_content, split_into_reports, take_notes
 from .vocabulary import read_vocabulary
@@ -262,13 +263,45 @@ def protocol_from_transcript(
     meeting: Meeting | None = None,
     client: LLMClient | None = None,
     progress: Progress | None = None,
+    run_name: str = "",
 ) -> Protocol:
     """Из стенограммы — протокол с поручениями.
 
     Видеокарта здесь не нужна: шаг работает и на ноутбуке, лишь бы рядом
     отвечала модель. Именно поэтому стенограмму стоит сохранять — пересобрать
     протокол с другими именами участников можно, не распознавая заново.
+
+    :param run_name: как называется этот прогон. Тем же именем подписана его
+        папка, и трасса берёт его же: иначе трассу и папку не свести. Считать
+        имя здесь нельзя — в нём час расчёта, а разбор идёт двадцать минут, и
+        посчитанное в конце разошлось бы с посчитанным в начале.
     """
+    settings = settings or Settings()
+    # Прогон целиком — одна трасса, и всё, что уходит модели, ложится
+    # внутрь неё. Своей записки о разборе это не отменяет: воронку по
+    # стадиям трассировка не знает и знать не может.
+    with tracing.run(
+        run_name or "разбор",
+        settings,
+        заседание=getattr(meeting, "date", ""),
+        выписывает=settings.llm_model,
+        проверяет=settings.llm_verify_model,
+    ):
+        return _protocol(
+            transcript, settings,
+            meeting=meeting, client=client, progress=progress,
+        )
+
+
+def _protocol(
+    transcript: Transcript,
+    settings: Settings,
+    *,
+    meeting: Meeting | None,
+    client: LLMClient | None,
+    progress: Progress | None,
+) -> Protocol:
+    """Сам разбор. Отделён от трассы, чтобы не двигать его целиком вправо."""
     settings = settings or Settings()
     meeting = meeting or Meeting()
     client = client or LLMClient(settings)

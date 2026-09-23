@@ -1547,11 +1547,21 @@ if st.button("Собрать протокол", type="primary"):
     )
     client = LLMClient(settings)
 
+    # Метка прогона считается здесь, до разбора, а не после него. Ею
+    # подписана и папка прогона, и трасса: разбор идёт двадцать минут, а в
+    # метке час расчёта — посчитай её в конце, и папка с трассой разойдутся.
+    made_by = (
+        models_tag(settings.llm_model, settings.llm_verify_model)
+        if BASE.name_with_models else ""
+    )
+    tag = run_tag(st.session_state.get("meeting_date", ""), models=made_by)
+
     # Здесь так же: модель отвечает по десятку секунд на фрагмент, и на
     # длинном совещании это минуты тишины.
     live = Live("Читаю стенограмму…")
     protocol = protocol_from_transcript(
-        transcript, settings, meeting=meeting, client=client, progress=live
+        transcript, settings, meeting=meeting, client=client, progress=live,
+        run_name=tag,
     )
     live.finish("Протокол собран")
 
@@ -1570,14 +1580,6 @@ if st.button("Собрать протокол", type="primary"):
     # Имя файла несёт дату совещания и час расчёта: из папки его вынимают —
     # пересылают, кладут рядом с чужим, — и «протокол.md» от трёх разных
     # заседаний в одной папке загрузок неразличимы.
-    meeting = st.session_state.get("meeting_date", "")
-    # У протокола свои модели — та, что выписывала, и та, что проверяла.
-    # Сейчас прогоны различаются именно ими.
-    made_by = (
-        models_tag(settings.llm_model, settings.llm_verify_model)
-        if BASE.name_with_models else ""
-    )
-    tag = run_tag(meeting, models=made_by)
     stem = f"{tag}_протокол"
     folder = st.session_state.get("run_dir") or run_dir(
         runs_root(out_dir), st.session_state.get("stem", "совещание"), tag=tag

@@ -427,6 +427,7 @@ def _answered(
             system, chunk.text,
             json_mode=json_mode,
             schema=NOTES_SCHEMA if json_mode else None,
+            stage="отмеченное",
         )
     except LLMError as exc:
         logger.warning("Часть доклада не пересказана: {}", exc)

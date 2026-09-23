@@ -35,7 +35,6 @@ import re
 from .people import (
     PATRONYMIC,
     Person,
-    canonical,
     is_given_name,
     looks_like_person,
     stems,
@@ -351,6 +350,24 @@ _PATRONYMIC = re.compile(f"^{PATRONYMIC}$")
 SAME_SURNAME = 0.8
 
 
+#: Чем имя обрастает в записи и в подсказке о голосе. «Докладывает такой-то»
+#: приезжает из переклички, «Уважаемый такой-то» — из обращения, и с этим
+#: довеском имя не сводится ни с чем: в описи оно записано без него.
+_BEFORE_A_NAME = (
+    "уважаемый", "уважаемая", "уважаемые", "уважаемому",
+    "докладывает", "доложит", "выступает", "выступит",
+    "коллега", "коллеги", "это",
+)
+
+
+def _bare_name(name: str) -> str:
+    """Имя без обращения и без «докладывает» перед ним."""
+    words = (name or "").split()
+    while words and words[0].lower().strip(".,:;") in _BEFORE_A_NAME:
+        words = words[1:]
+    return " ".join(words)
+
+
 def matched(who: str, people: Sequence[Person]) -> str:
     """Кто из описи назван — или пусто, если никто.
 
@@ -358,14 +375,21 @@ def matched(who: str, people: Sequence[Person]) -> str:
     проверяется дважды: он должен быть записью описи, а не исходной строкой,
     и названная фамилия должна оказаться его фамилией.
     """
-    found = canonical(who, people)
-    # Сверяемся с описью, а не с тем, изменилась ли строка: названный ровно
-    # так, как записан в реестре, не меняется — и при проверке «строка
-    # другая, значит узнали» вычёркивался бы именно тот, кого назвали
-    # правильнее всех.
-    if found not in {person.name for person in people}:
+    who = _bare_name(who) or who
+    said = stems(who)
+    if len(said) < 2:
+        # По одному слову не опознают: тёзок на заседании несколько.
         return ""
-    return found if _surname_agrees(who, found) else ""
+    # Фамилия отсеивает раньше, чем считается единственность, и это важнее,
+    # чем кажется. Основы слов нечувствительны к роду: «Мазанова Евгения
+    # Владимировна» совпала двумя основами сразу с двумя мужчинами —
+    # «Евгений Владимирович» и ещё одним. Проверь мы единственность первой,
+    # настоящий однофамилец потерялся бы в этой двусмысленности.
+    hits = [
+        person.name for person in people
+        if len(said & stems(person.name)) >= 2 and _surname_agrees(who, person.name)
+    ]
+    return hits[0] if len(hits) == 1 else ""
 
 
 def _surname_agrees(who: str, name: str) -> bool:

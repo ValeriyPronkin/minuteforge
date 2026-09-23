@@ -319,3 +319,48 @@ def test_only_a_room_wide_circle_gives_up_its_region():
     assert "генеральный подрядчик" not in ROOM_WIDE
     assert "управляющие компании" not in ROOM_WIDE
     assert ROOM_WIDE <= COLLECTIVE_NAMES
+
+
+# ------------------------------------------- что показал первый живой прогон
+
+def test_a_name_with_an_address_before_it_still_resolves(tmp_path):
+    """«Докладывает такой-то» приезжает из переклички подсказкой о голосе.
+
+    С этим довеском имя не сводится ни с чем: в описи оно записано без него.
+    """
+    roster = roster_of(PEOPLE, directory_of(tmp_path))
+    assert (
+        roster.canonical("Докладывает Семенов Алексей")
+        == "Семенов Алексей Валерьевич"
+    )
+    assert (
+        roster.canonical("Уважаемый Семенов Алексей Валерьевич")
+        == "Семенов Алексей Валерьевич"
+    )
+
+
+def test_a_mangled_name_is_not_smuggled_in_by_an_address(tmp_path):
+    """Обращение отсекается, но выдуманного человека это не делает своим."""
+    roster = roster_of(PEOPLE, directory_of(tmp_path))
+    assert roster.canonical("Уважаемый Прохожий Иванович") == ""
+
+
+def test_the_surname_sifts_before_uniqueness_is_counted(tmp_path):
+    """Основы слов нечувствительны к роду, и тёзкой оказывается мужчина.
+
+    «Огородникова Наталья Юрьевна» совпадает двумя основами и с мужчиной
+    «Огородников Наталий Юрьевич», будь он в списке. Считай мы
+    единственность раньше фамилии, настоящий человек потерялся бы в этой
+    двусмысленности.
+    """
+    from minuteforge.assignees import matched
+    from minuteforge.people import Person
+
+    people = [
+        Person("Огородникова Наталья Юрьевна"),
+        Person("Семенова Наталья Юрьевна"),
+    ]
+    # Фамилия названа — она и решает, хотя имя с отчеством у обеих одно.
+    assert matched("Огородникова Наталья", people) == "Огородникова Наталья Юрьевна"
+    # Фамилия не названа — двусмысленность честно остаётся двусмысленностью.
+    assert matched("Наталья Юрьевна", people) == ""

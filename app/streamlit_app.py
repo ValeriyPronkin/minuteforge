@@ -1541,6 +1541,9 @@ if st.button("Собрать протокол", type="primary"):
         title=title, date=date, place=place, chair=chair,
         secretary=secretary, number=number,
         names=names or None, people=people or None,
+        # Реестр отдельно от people: в people к нему домешаны имена,
+        # вычитанные из записи, и закрытому списку исполнителей они не годятся.
+        registry=roster,
     )
     client = LLMClient(settings)
 

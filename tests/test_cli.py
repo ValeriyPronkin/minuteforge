@@ -97,10 +97,11 @@ def test_protocol_command_writes_both_files(segments_file, tmp_path, fake_llm, c
         "--date", "05.06.2025",
     ])
     assert code == 0
-    assert (tmp_path / "out" / "протокол.md").exists()
-    assert (tmp_path / "out" / "протокол_поручения.csv").exists()
+    written = sorted((tmp_path / "out").rglob("*протокол.md"))
+    assert written, "протокол"
+    assert sorted((tmp_path / "out").rglob("*протокол_поручения.csv")), "поручения"
 
-    document = (tmp_path / "out" / "протокол.md").read_text(encoding="utf-8")
+    document = written[0].read_text(encoding="utf-8")
     assert "Орлов В.П." in document
     assert "05.06.2025" in document
     assert "Поручений: 1" in capsys.readouterr().out
@@ -134,8 +135,8 @@ def test_recognize_reports_labels_for_the_next_step(tmp_path, monkeypatch, capsy
     out = capsys.readouterr().out
     assert "SPEAKER_00, SPEAKER_01" in out
     assert "minuteforge protocol" in out, "должна быть подсказка про следующий шаг"
-    assert (tmp_path / "meeting_transcript.txt").exists(), "стенограмма текстом"
-    assert (tmp_path / "meeting_transcript.json").exists(), "стенограмма для расчёта"
+    assert sorted(tmp_path.rglob("*стенограмма.txt")), "стенограмма текстом"
+    assert sorted(tmp_path.rglob("*стенограмма.json")), "стенограмма для расчёта"
 
 
 def test_missing_token_exits_without_a_traceback(tmp_path, monkeypatch, capsys):
@@ -379,3 +380,133 @@ def test_a_date_given_by_hand_is_not_overridden(tmp_path, monkeypatch, fake_llm)
 
     main(["run", str(video), "--out", str(tmp_path / "out"), "--date", "08.09.2026, 11:00"])
     assert seen["meeting"].date == "08.09.2026, 11:00"
+
+
+@pytest.fixture
+def anywhere_but_the_project(tmp_path, monkeypatch):
+    """Папки приложения — в tmp_path, а не в проекте.
+
+    Настройки читаются из настоящего config.yaml, и без этого расчёт писал бы
+    в рабочие папки разработчика.
+    """
+    places = {
+        "meetings_dir": tmp_path / "заседания",
+        "input_dir": tmp_path / "входящие",
+        "output_dir": tmp_path / "готовое",
+        "work_dir": tmp_path / "промежуточное",
+    }
+    for name, where in places.items():
+        monkeypatch.setenv(f"MINUTEFORGE_{name.upper()}", str(where))
+    return places
+
+
+@pytest.fixture
+def heard(monkeypatch):
+    """Распознавание подменено: проверяем раскладку, а не расшифровку."""
+    seen = {}
+
+    def remember(source, settings, **kwargs):
+        seen.update(kwargs, source=source)
+        return Transcript([Block("SPEAKER_00", "Раз.", 0, 5)])
+
+    monkeypatch.setattr("minuteforge.cli.transcribe_meeting", remember)
+    return seen
+
+
+def test_result_lands_in_the_meeting_folder_of_the_recording(
+    anywhere_but_the_project, heard, tmp_path
+):
+    """Результат ложится туда, откуда взяли запись.
+
+    Папку под заседание заводит человек и кладёт в неё присланное
+    секретарём; там же он ждёт и стенограмму. Прежде ключ --out молча
+    указывал на data/output, и расшифровка уходила в перевалочную папку
+    приложения — а папку заседания заводили заранее.
+
+    Папка с присланным названа по-русски намеренно: её имя придумывает
+    человек, и требовать «secretary» значит не узнать заседание.
+    """
+    meeting = anywhere_but_the_project["meetings_dir"] / "2026-10-01"
+    (meeting / "Секретарь").mkdir(parents=True)
+    (meeting / "Секретарь" / "повестка.docx").write_bytes(b"docx")
+    source = meeting / "запись.mp4"
+    source.write_bytes(b"video")
+
+    assert main(["recognize", str(source)]) == 0
+
+    assert sorted((meeting / "runs").glob("*/*стенограмма.txt")), "прогон в runs"
+    assert (meeting / "стенограмма.txt").exists(), "стенограмма заседания в корне"
+    assert not anywhere_but_the_project["output_dir"].exists(), (
+        "в перевалочную папку приложения не должно лечь ничего"
+    )
+
+
+def test_a_recording_from_the_staging_folder_goes_to_the_output_folder(
+    anywhere_but_the_project, heard
+):
+    """Перевалочная папка заседанием не бывает.
+
+    В input_dir запись кладут на время, и складывать туда протоколы незачем:
+    оттуда их никто не забирает.
+    """
+    inbox = anywhere_but_the_project["input_dir"]
+    inbox.mkdir(parents=True)
+    source = inbox / "запись.mp4"
+    source.write_bytes(b"video")
+
+    assert main(["recognize", str(source)]) == 0
+
+    out = anywhere_but_the_project["output_dir"]
+    assert sorted(out.rglob("*стенограмма.txt")), "результат в папке вывода"
+    assert not sorted(inbox.rglob("*стенограмма.txt")), "во входящих ничего не осталось"
+
+
+def test_intermediate_files_stay_in_the_work_folder(
+    anywhere_but_the_project, heard, tmp_path
+):
+    """Звук из записи — промежуточное, и в папке заседания ему не место.
+
+    Прежде рабочей папкой служила папка вывода: из часовой записи туда
+    ложилось больше сотни мегабайт wav, и убирать его приходилось руками.
+    """
+    meeting = anywhere_but_the_project["meetings_dir"] / "2026-10-01"
+    (meeting / "secretary").mkdir(parents=True)
+    source = meeting / "запись.mp4"
+    source.write_bytes(b"video")
+
+    assert main(["recognize", str(source)]) == 0
+    assert heard["work_dir"] == anywhere_but_the_project["work_dir"]
+
+
+def test_the_out_key_still_wins(anywhere_but_the_project, heard, tmp_path):
+    """Сказанное явно важнее угаданного: --out указывает место сам."""
+    meeting = anywhere_but_the_project["meetings_dir"] / "2026-10-01"
+    (meeting / "secretary").mkdir(parents=True)
+    source = meeting / "запись.mp4"
+    source.write_bytes(b"video")
+    asked = tmp_path / "сетевая папка"
+
+    assert main(["recognize", str(source), "--out", str(asked)]) == 0
+
+    assert sorted(asked.rglob("*стенограмма.txt")), "результат там, где велели"
+    assert not (meeting / "стенограмма.txt").exists(), "в заседание ничего не легло"
+
+
+def test_the_run_folder_is_named_by_the_day_of_the_meeting(
+    anywhere_but_the_project, heard
+):
+    """Дата совещания в имени папки прогона, а не день расчёта.
+
+    Проводник сортирует прогоны по ней, а своего ключа --date у recognize
+    нет: дату знает сама запись — из имени файла или из свойств контейнера.
+    """
+    meeting = anywhere_but_the_project["meetings_dir"] / "2026-10-01"
+    (meeting / "secretary").mkdir(parents=True)
+    source = meeting / "Совещание 01.10.2026.mp4"
+    source.write_bytes(b"video")
+
+    assert main(["recognize", str(source)]) == 0
+
+    runs = [path.name for path in (meeting / "runs").iterdir()]
+    assert len(runs) == 1
+    assert runs[0].startswith("2026-10-01_"), runs[0]

@@ -30,14 +30,18 @@ from .config import HF_TOKEN_ENV, Settings
 from .journal import setup_file_log
 from .llm import LLMClient, free_the_card
 from .audio import AudioError, ffmpeg_available
+from .meetings import meeting_for, runs_root
 from .people import merge_suggestions, mentioned_people, read_people
 from .pipeline import (
     Meeting,
     check_writable,
+    lay_out_transcript,
+    models_tag,
     protocol_from_transcript,
     recorded_when,
+    run_dir,
+    run_tag,
     save,
-    save_transcript,
     transcribe_meeting,
 )
 from .transcribe import GATED_MODELS, MissingToken, RecognitionError, check_model_access
@@ -60,7 +64,11 @@ def build_parser() -> argparse.ArgumentParser:
         "recognize", help="запись -> стенограмма (нужна видеокарта)"
     )
     recognize.add_argument("source", type=Path, help="видео или аудио")
-    recognize.add_argument("--out", type=Path, default=None, help="куда положить стенограмму")
+    recognize.add_argument(
+        "--out", type=Path, default=None,
+        help="куда положить стенограмму. Не задан — папка заседания, та же, "
+        "откуда взяли запись; заседания не видно — output_dir из настроек",
+    )
     recognize.add_argument("--model", default=None, help="модель Whisper: tiny…large-v3")
     recognize.add_argument("--language", default=None)
     recognize.add_argument("--speakers", type=int, default=None, help="сколько человек говорит")
@@ -112,7 +120,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_meeting_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--out", type=Path, default=Path("data/output"))
+    parser.add_argument(
+        "--out", type=Path, default=None,
+        help="куда положить результат. Не задан — папка заседания, та же, "
+        "откуда взяли запись; заседания не видно — output_dir из настроек",
+    )
     parser.add_argument("--title", default="Протокол совещания")
     parser.add_argument(
         "--date", default="",
@@ -141,6 +153,41 @@ def _add_meeting_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--llm-url", default=None)
     parser.add_argument("--llm-model", default=None)
+
+
+def results_dir(args: argparse.Namespace, settings: Settings, beside: Path | None) -> Path:
+    """Куда ложится результат: заданное ключом, папка заседания, настройки.
+
+    Папка заседания — та, в которой лежит то, с чего начали: запись для
+    ``run`` и ``recognize``, стенограмма для ``protocol``. Так же считает её
+    и интерфейс, и правило у них общее — ``meetings.meeting_for``.
+
+    Прежде ключ ``--out`` молча указывал на ``data/output``, и стенограмма
+    уходила туда независимо от того, где лежит запись: папку под заседание
+    заводили заранее, складывали в неё присланное секретарём, а результат
+    находили в перевалочной папке приложения и разносили руками.
+
+    Заседания не видно — остаётся ``output_dir`` из настроек: так бывает,
+    когда запись лежит в перевалочной или рабочей папке.
+    """
+    if getattr(args, "out", None):
+        return Path(args.out).expanduser().resolve()
+    folder, _ = meeting_for(
+        Path(beside).expanduser().resolve() if beside else None,
+        meetings_dir=_dir(settings.meetings_dir),
+        not_meetings=(_dir(settings.input_dir), _dir(settings.work_dir)),
+    )
+    return folder or _dir(settings.output_dir)
+
+
+def _dir(where: str | Path) -> Path:
+    """Папка из настроек полным путём.
+
+    Пути в настройках пишут и относительными — ``data/vks``, — а сравнивать
+    их приходится с полными: путь к записи приходит от того, кто запускает.
+    Относительный считается от текущей папки, как и сам ``config.yaml``.
+    """
+    return Path(where).expanduser().resolve()
 
 
 def parse_names(pairs: list[str]) -> dict[str, str]:
@@ -330,16 +377,57 @@ def print_step(step) -> None:
 
 
 
+def _say_reference(laid, out: Path) -> None:
+    """Про стенограмму заседания — вслух.
+
+    Легла она в корень папки заседания или там уже лежала, видно только по
+    этой строчке: заменить лежащую может лишь человек, и молчать о том, что
+    расшифровка никуда не попала, нельзя.
+    """
+    if not laid.meeting:
+        return
+    if laid.reference:
+        print(f"Стенограмма заседания положена в {out}")
+    else:
+        print(
+            f"Стенограмма заседания в {out} уже была — оставлена как есть. "
+            "Заменить её может только человек: вторая расшифровка бывает "
+            "хуже первой."
+        )
+
+
 def command_recognize(args: argparse.Namespace) -> int:
     settings = settings_from(args)
-    work_dir = args.out or args.source.parent
+    out = results_dir(args, settings, args.source)
+    # Проверяется до расчёта, а не при сохранении: папка часто сетевая, а
+    # узнавать о недоступном диске после сорока минут распознавания —
+    # терять сорок минут.
+    trouble = check_writable(out)
+    if trouble:
+        print(trouble)
+        return 1
+    print(f"Результат ляжет в {out}")
     free_the_card(settings)
+    # Промежуточное — в рабочую папку, а не к результату: из часовой записи
+    # извлекается больше сотни мегабайт звука, и в папке заседания ему не
+    # место. Прежде рабочей папкой служила папка вывода, и звук ложился
+    # рядом со стенограммой — а убирают его как промежуточное.
     transcript = transcribe_meeting(
-        args.source, settings, work_dir=work_dir,
+        args.source, settings, work_dir=_dir(settings.work_dir),
         diarize=not args.no_diarize, progress=print_step, fresh=args.fresh,
         start=args.start, end=args.end,
     )
-    paths = save_transcript(transcript, work_dir, stem=f"{args.source.stem}_transcript")
+    # Дата совещания в имени папки прогона — не украшение: проводник
+    # сортирует прогоны по ней, а у recognize своего ключа --date нет. Знает
+    # её сама запись, как и в команде run; не знает — останется день
+    # расчёта, пустое место в имени хуже неточного.
+    heard_on = recorded_when(args.source)
+    laid = lay_out_transcript(
+        transcript, out, args.source.stem, settings,
+        meeting=heard_on.as_text() if heard_on else "",
+        meetings_dir=_dir(settings.meetings_dir),
+    )
+    paths = laid.files
 
     for note in getattr(transcript, "notes", []):
         print(f"  ВНИМАНИЕ: не хватило видеопамяти — {note}")
@@ -351,6 +439,7 @@ def command_recognize(args: argparse.Namespace) -> int:
     print(f"Метки: {', '.join(transcript.speakers)}")
     print(f"Стенограмма текстом: {paths['text']}")
     print(f"Стенограмма для расчёта: {paths['json']}")
+    _say_reference(laid, out)
     print("Дальше: minuteforge protocol", paths["json"], '--name SPEAKER_00="Фамилия И.О."')
     return 0
 
@@ -409,9 +498,46 @@ def command_compare(args: argparse.Namespace) -> int:
 def command_protocol(args: argparse.Namespace) -> int:
     settings = settings_from(args)
     transcript = load_transcript(args.segments)
-    protocol = _build(transcript, args, settings)
-    _report(protocol, save(protocol, args.out, template=args.template or settings.form_file))
+    # Заседание задаёт стенограмма: она и есть предмет разбора, а лежит она
+    # в папке своего заседания — хоть в корне, хоть в папке прогона.
+    out = results_dir(args, settings, args.segments)
+    trouble = check_writable(out)
+    if trouble:
+        print(trouble)
+        return 1
+    folder, stem = _run_place(out, args, settings, args.segments.stem)
+    print(f"Результат ляжет в {folder}")
+    protocol = _build(transcript, args, settings, run_name=stem)
+    _report(protocol, save(
+        protocol, folder, stem=f"{stem}_протокол",
+        template=args.template or settings.form_file,
+    ))
     return 0
+
+
+def _run_place(
+    out: Path, args: argparse.Namespace, settings: Settings, stem: str
+) -> tuple[Path, str]:
+    """Папка прогона и метка, которой подписываются файлы в ней.
+
+    Своя папка на каждый разбор: иначе второй прогон той же стенограммы
+    молча затирает первый. Метка несёт дату совещания, час расчёта и модель
+    — из папки файлы вынимают, пересылают, кладут рядом с чужими, и
+    «протокол.md» от трёх разных заседаний в одной папке загрузок
+    неразличимы.
+
+    Модель в метке — та, что собирает поручения, а не распознаёт: протокол
+    пересобирают по нескольку раз разными моделями из одной стенограммы.
+    """
+    made_by = (
+        models_tag(settings.llm_model, settings.llm_verify_model)
+        if settings.name_with_models else ""
+    )
+    tag = run_tag(getattr(args, "date", "") or "", models=made_by)
+    place = run_dir(
+        runs_root(out, meetings_dir=_dir(settings.meetings_dir)), stem, tag=tag
+    )
+    return place, tag
 
 
 def command_run(args: argparse.Namespace) -> int:
@@ -430,16 +556,41 @@ def command_run(args: argparse.Namespace) -> int:
         else:
             args.date = found.as_text()
             print(f"Дата совещания {found.source}: {args.date}")
+    out = results_dir(args, settings, args.source)
+    trouble = check_writable(out)
+    if trouble:
+        print(trouble)
+        return 1
+    print(f"Результат ляжет в {out}")
     free_the_card(settings)
+    # Промежуточное — в рабочую папку: см. command_recognize.
     transcript = transcribe_meeting(
-        args.source, settings, work_dir=args.out, progress=print_step
+        args.source, settings, work_dir=_dir(settings.work_dir),
+        progress=print_step,
     )
-    protocol = _build(transcript, args, settings)
-    _report(protocol, save(protocol, args.out, template=args.template or settings.form_file))
+    laid = lay_out_transcript(
+        transcript, out, args.source.stem, settings,
+        meeting=args.date, meetings_dir=_dir(settings.meetings_dir),
+    )
+    print(f"Стенограмма: {laid.files['text']}")
+    _say_reference(laid, out)
+    # Протокол ложится в ту же папку прогона, что и стенограмма: всё по
+    # одному совещанию сразу, папку целиком отдают в другое подразделение.
+    # А подписан он своей меткой — с моделью, которая собрала поручения.
+    _, stem = _run_place(out, args, settings, args.source.stem)
+    protocol = _build(transcript, args, settings, run_name=stem)
+    _report(protocol, save(
+        protocol, laid.folder, stem=f"{stem}_протокол",
+        with_transcript=False,
+        template=args.template or settings.form_file,
+    ))
     return 0
 
 
-def _build(transcript: Transcript, args: argparse.Namespace, settings: Settings):
+def _build(
+    transcript: Transcript, args: argparse.Namespace, settings: Settings,
+    *, run_name: str = "",
+):
     roster = read_people(args.people) if args.people else []
     people = merge_suggestions(roster, mentioned_people(transcript.as_text()))
     meeting = Meeting(
@@ -454,7 +605,7 @@ def _build(transcript: Transcript, args: argparse.Namespace, settings: Settings)
     )
     return protocol_from_transcript(
         transcript, settings, meeting=meeting,
-        client=LLMClient(settings), progress=print_step,
+        client=LLMClient(settings), progress=print_step, run_name=run_name,
     )
 
 

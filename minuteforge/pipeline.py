@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Sequence
@@ -59,6 +59,8 @@ from .transcribe import (
     recognize,
     report,
 )
+
+from .meetings import is_meeting, runs_root
 
 #: Расширения, которые считаем видео: из них сперва извлекается звук.
 VIDEO_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v"}
@@ -816,6 +818,72 @@ def keep_as_reference(
             folder.name, ", ".join(sorted(p.name for p in copied.values())),
         )
     return copied
+
+
+@dataclass
+class Laid:
+    """Разложенная стенограмма: где лежит прогон и что попало в заседание."""
+
+    #: Папка прогона — своя на каждый разбор.
+    folder: Path
+    #: Метка прогона: день ВКС, час расчёта, модель. Ею названы и папка, и
+    #: файлы в ней, и считается она один раз — посчитанная второй, она
+    #: разошлась бы с именем папки на минуту.
+    tag: str
+    #: Что сохранено в папке прогона.
+    files: dict[str, Path]
+    #: Папка результатов — папка заседания, и у стенограммы есть вторая роль.
+    meeting: bool = False
+    #: Положенное в корень папки заседания. Пусто — стенограмма заседания
+    #: там уже была, и её не тронули.
+    reference: dict[str, Path] = field(default_factory=dict)
+
+
+def lay_out_transcript(
+    transcript: Transcript,
+    out_dir: str | Path,
+    stem: str,
+    settings: Settings,
+    *,
+    meeting: str = "",
+    tag: str = "",
+    meetings_dir: str | Path | None = None,
+) -> Laid:
+    """Раскладывает стенограмму так, как её ждут в папке заседания.
+
+    Своя папка на каждый разбор: иначе второй прогон той же записи молча
+    затирает первый, и сравнивать настройки не с чем. У стенограммы своя
+    модель — распознавания, и в имени стоит она: расшифровки large-v3 и
+    medium различаются фамилиями и цифрами, а по имени файла этого потом не
+    узнать.
+
+    Папка заседания получает ту же стенограмму ещё и в корень, под общим
+    именем: там у неё вторая роль — стенограмма заседания, одна на
+    заседание. Уже лежащую не трогаем, см. ``keep_as_reference``.
+
+    Живёт это в пакете, а не в интерфейсе, потому что раскладку ждут одну и
+    ту же: командная строка клала стенограмму в ``output_dir`` россыпью, и
+    то же заседание выходило разложенным двумя разными способами.
+
+    :param meetings_dir: папка заседаний — по ней узнаётся, заседание перед
+        нами или перевалочная папка. Задаётся вызывающим: интерфейс знает её
+        своим путём, командная строка берёт из настроек.
+    """
+    heard_by = (
+        models_tag(transcript.model or settings.asr_model)
+        if settings.name_with_models else ""
+    )
+    tag = tag or run_tag(meeting, models=heard_by)
+    folder = run_dir(
+        runs_root(out_dir, meetings_dir=meetings_dir), stem, tag=tag
+    )
+    files = save_transcript(transcript, folder, stem=f"{tag}_стенограмма")
+    if not is_meeting(out_dir, meetings_dir=meetings_dir):
+        return Laid(folder=folder, tag=tag, files=files)
+    return Laid(
+        folder=folder, tag=tag, files=files, meeting=True,
+        reference=keep_as_reference(files, out_dir),
+    )
 
 
 def save(

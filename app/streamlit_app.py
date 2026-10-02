@@ -43,6 +43,15 @@ from minuteforge.dates import date_from_name  # noqa: E402
 from minuteforge.directory import read_directory  # noqa: E402
 from minuteforge.transcribe import read_hints  # noqa: E402
 from minuteforge.journal import setup_file_log  # noqa: E402
+from minuteforge.meetings import (  # noqa: E402
+    MEDIA_SUFFIXES,
+    is_meeting,
+    materials_in,
+    meeting_folders,
+    meeting_for,
+    recordings_in,
+    runs_root as _runs_root,
+)
 from minuteforge.llm import LLMClient, free_the_card, is_embedder, same_model  # noqa: E402
 from minuteforge.people import (  # noqa: E402
     like,
@@ -59,14 +68,13 @@ from minuteforge.pipeline import (  # noqa: E402
     clear_cache,
     protocol_from_transcript,
     _free_name,
-    keep_as_reference,
+    lay_out_transcript,
     _text_with_head,
     recorded_when,
     models_tag,
     run_dir,
     run_tag,
     save,
-    save_transcript,
     transcribe_meeting,
 )
 from minuteforge import LOADED_REVISION, disk_revision  # noqa: E402
@@ -118,9 +126,6 @@ VKS_DIR = (
 )
 GLOSSARY = VKS_DIR / "glossary.md"
 
-#: Что считаем записью совещания при выборе файла с диска.
-MEDIA_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v", ".wav", ".m4a", ".mp3"}
-
 # Журнал заводится сразу: у интерфейса, запущенного ярлыком, консоли,
 # считай, нет — окно закрывают, и разбираться потом не с чем. Повторный
 # вызов на перезапуске сценария ничего не делает.
@@ -148,119 +153,30 @@ def full_width() -> dict:
     return {}
 
 
-#: Насколько высоко подниматься от файла в поисках папки заседания. Хватает
-#: одного этажа: стенограмма и протокол ложатся в свою папку прогона внутри
-#: папки заседания, а выше неё — уже все заседания разом, и чужие материалы
-#: там попались бы наверняка.
-#: На сколько этажей подниматься в поисках заседания. Стенограмма прошлого
-#: прогона лежит в «<заседание>/runs/<прогон>/» — это два этажа, а не один,
-#: как было, пока прогоны лежали в папке заседания прямо.
-_UP = 2
-
-#: Чем папка заседания отличается от любой другой: в ней заведено своё
-#: хозяйство. «secretary» — присланное секретарём, «prep» — посчитанное до
-#: совещания, «runs» — прогоны.
-_MEETING_MARKS = ("secretary", "prep", "runs")
-
-
-def _materials_near(file: Path | None) -> tuple[Path | None, list[Path]]:
-    """Папка заседания и материалы секретаря в ней.
-
-    Заседание узнаётся по своему хозяйству, а не по материалам: с тех пор
-    как присланное переехало в «secretary», в самой папке заседания docx не
-    лежит, и поиск по ним уводил этажом ниже — в «runs» или прямо в папку
-    прошлого прогона, куда потом ложился и результат.
-
-    Примет не нашлось — остаётся прежнее правило: папка, где лежат docx и
-    xlsx. Нет и их — та, с которой начали: человеку надо сказать, куда их
-    класть.
-    """
-    if file is None:
-        return None, []
-    here = file.parent
-    folders = [here, *list(here.parents)[:_UP]]
-    for folder in folders:
-        if any((folder / mark).is_dir() for mark in _MEETING_MARKS):
-            return folder, _materials_in(folder)
-    for folder in folders:
-        if not folder.exists():
-            break
-        found = _materials_in(folder)
-        if found:
-            return folder, found
-    return here, []
-
-
+# Папку заседания узнаёт пакет — одинаково, чем бы расчёт ни запустили.
+# Здесь остаётся только подставить своё: интерфейс знает папку заседаний как
+# VKS_DIR, а перевалочную и рабочую — как INPUT_DIR и WORK_DIR.
 def _is_meeting(folder: Path) -> bool:
     """Папка заседания это или обычная."""
-    return any((folder / mark).is_dir() for mark in _MEETING_MARKS)
+    return is_meeting(folder, meetings_dir=VKS_DIR)
+
+
+def _meeting_for(beside: Path | None) -> tuple[Path | None, list[Path]]:
+    """Папка, в которую ложится результат, — или None, если её не определить."""
+    return meeting_for(
+        beside, meetings_dir=VKS_DIR, not_meetings=(INPUT_DIR, WORK_DIR)
+    )
 
 
 def runs_root(out_dir: Path) -> Path:
-    """Куда положить папку прогона.
-
-    В папке заседания прогоны лежат в «runs», а не вперемешку с эталонными
-    файлами: заседание — это документы секретаря и подписанный протокол,
-    прогон — черновик машины, и путать их нельзя. Раньше прогон ложился в
-    корень, а в «runs» его переносили руками — лишний перенос это лишняя
-    возможность положить не туда.
-
-    Папка не заседания — перевалочная, складывать там не во что, и прогон
-    лежит сам по себе.
-    """
-    return out_dir / "runs" if _is_meeting(out_dir) else out_dir
+    """Куда положить папку прогона: в «runs» заседания или саму папку."""
+    return _runs_root(out_dir, meetings_dir=VKS_DIR)
 
 
 #: Как список участников называется в папке заседания. То же имя знает
 #: collect_people в prepare_meeting.py: из этих файлов всех заседаний
 #: собирается накопительный справочник людей.
 ROSTER_NAME = "участники.csv"
-
-#: Наше, а не секретарское: прогоны и посчитанное до совещания. Внутрь не
-#: смотрим — иначе протокол прошлого прогона вернётся как материал.
-_OURS = ("runs", "prep")
-
-#: Подписанный протокол лежит в папке заседания наравне с присланным, но
-#: материалом не является: он не вход, а выход, и по нему сверяют разбор.
-#: Попав в материалы, он уходил моделью в тезисы — то есть в подсказку
-#: распознаванию попадал готовый ответ.
-_NOT_MATERIALS = ("протокол",)
-
-
-def _materials_in(folder: Path) -> list[Path]:
-    """Документы секретаря по заседанию.
-
-    Смотрим в саму папку заседания и на этаж вглубь — в любую подпапку,
-    кроме наших. Имя подпапки значения не имеет, и это намеренно:
-    «secretary» — соглашение раскладки, а заводит папку человек и назовёт её
-    как придётся: «Секретарь», «от секретаря», «Материалы». Требовать точного
-    написания значит терять материалы молча — хуже этого здесь ничего нет,
-    потому что пропажа выглядит как «файлов не прислали».
-
-    У заседаний, разложенных до этой раскладки, присланное лежит прямо в
-    папке — потому корень и смотрится наравне с подпапками.
-    """
-    if not folder.is_dir():
-        return []
-    places = [folder]
-    try:
-        places += [
-            path for path in sorted(folder.iterdir())
-            if path.is_dir() and path.name.lower() not in _OURS
-        ]
-    except OSError:
-        # Общий диск отвалился посреди обхода. Материалы — не то, ради чего
-        # стоит ронять интерфейс: о недоступности скажет проверка папки.
-        return []
-    return sorted(
-        path
-        for place in places if place.is_dir()
-        for path in place.glob("*")
-        if path.suffix.lower() in (".docx", ".xlsx", ".pdf")
-        and not path.name.startswith("~$")
-        and not path.stem.lower().startswith(_NOT_MATERIALS)
-    )
-
 
 def pick_file_dialog(
     title: str = "Выберите запись совещания",
@@ -469,6 +385,32 @@ with st.sidebar:
         chosen = pick_file_dialog(start=START_DIR)
         if chosen:
             st.session_state["source_path"] = chosen
+    st.caption(
+        "Диалог открывается на той машине, где запущено приложение. Пришли "
+        "по ссылке с другого компьютера — выбирайте запись списком ниже."
+    )
+
+    # Список записей в папке заседаний: то же, что диалог, но папки читает
+    # приложение, а не проводник чужой машины. Без него пришедшему по ссылке
+    # оставалась загрузка через браузер, а с ней теряется путь, а вместе с
+    # путём — папка заседания: стенограмма уходила в data/output, хотя папку
+    # под это заседание завели заранее и материалы секретаря в ней лежали.
+    known = {
+        str(path.relative_to(VKS_DIR)): path for path in recordings_in(VKS_DIR)
+    }
+    if known:
+        from_vks = st.selectbox(
+            "…либо из папки заседаний",
+            ["", *known],
+            format_func=lambda name: name or "— не выбрано —",
+            key="from_vks",
+        )
+        # Назначаем на смену выбора, а не каждый проход: выбор остаётся в
+        # списке, и иначе он затирал бы запись, выбранную диалогом после
+        # него, — молча и уже на следующем нажатии.
+        if from_vks and st.session_state.get("from_vks_taken") != from_vks:
+            st.session_state["source_path"] = str(known[from_vks])
+            st.session_state["from_vks_taken"] = from_vks
 
     found = sorted(
         path for path in INPUT_DIR.glob("*")
@@ -503,6 +445,23 @@ with st.sidebar:
         uploaded = st.file_uploader(
             "Загрузить", type=["mp4", "avi", "mov", "mkv", "wav", "m4a", "mp3"]
         )
+        # Путь к загруженному файлу браузер не отдаёт и отдать не может, а
+        # вместе с путём теряется папка заседания. Поэтому её спрашиваем
+        # прямо — и списком, а не полем для пути: сетевой путь по памяти
+        # никто набирать не станет.
+        folders = {path.name: path for path in meeting_folders(VKS_DIR)}
+        named_meeting = None
+        if folders:
+            whose = st.selectbox(
+                "Заседание загруженной записи",
+                ["", *folders],
+                format_func=lambda name: name or "— определить по пути —",
+                help="Нужно только для записи, загруженной через браузер: "
+                "у неё пути нет, и папку заседания угадать не из чего. "
+                "Выбранная здесь папка станет папкой результатов.",
+            )
+            if whose:
+                named_meeting = folders[whose]
 
     # Стенограмма выбирается диалогом по той же причине, что и запись:
     # браузер отдаёт содержимое, но не путь, а вместе с путём теряется и
@@ -560,14 +519,14 @@ with st.sidebar:
     beside = Path(taken) if taken and Path(taken).exists() else None
     if beside is None:
         beside = source_path or segments_path
-    meeting_dir, materials = _materials_near(beside)
+    meeting_dir, materials = _meeting_for(beside)
 
     # Выбранная запись и стенограмма в памяти бывают из разных заседаний:
     # выбор остаётся в памяти приложения, а разбирают то, что в ней лежит.
     # Молчать об этом нельзя — прежде расхождение обнаруживалось по тому,
     # в какой папке нашёлся готовый протокол.
     if source_path is not None and beside != source_path:
-        chosen_dir, _ = _materials_near(source_path)
+        chosen_dir, _ = _meeting_for(source_path)
         if chosen_dir is not None and meeting_dir is not None and chosen_dir != meeting_dir:
             st.warning(
                 f"Выбрана запись из «{chosen_dir.name}», а разбор пойдёт по "
@@ -576,8 +535,12 @@ with st.sidebar:
                 "запись, или выберите стенограмму её заседания."
             )
 
-    if meeting_dir in (INPUT_DIR, None):
-        meeting_dir = None
+    # Папку назвали руками — значит, пути у записи нет. Своё название идёт
+    # только вторым: знает приложение путь — заседание считается по нему, и
+    # забытый в списке выбор не уводит результат в чужую папку.
+    if meeting_dir is None and named_meeting is not None:
+        meeting_dir = named_meeting
+        materials = materials_in(named_meeting)
 
     default_out = str(meeting_dir or OUTPUT_DIR)
     out_dir = Path(st.text_input(
@@ -1258,29 +1221,24 @@ if source_path is not None or uploaded is not None:
             # Кладём сразу в папку: «Загрузки» на этой машине — не то место,
             # откуда стенограмму заберёт другое подразделение.
             st.session_state["stem"] = source.stem
-            # Своя папка на каждый разбор: иначе второй прогон той же записи
-            # молча затирает первый, и сравнивать настройки не с чем.
-            # У стенограммы своя модель — распознавания, и в её имени стоит
-            # она: расшифровки large-v3 и medium различаются фамилиями и
-            # цифрами, а по имени файла этого потом не узнать.
-            meeting = st.session_state.get("meeting_date", "")
-            heard_by = models_tag(transcript.model or settings.asr_model) if BASE.name_with_models else ""
-            # Метка считается один раз: посчитанная второй, она разошлась бы
-            # с именем папки на минуту.
-            tag = run_tag(meeting, models=heard_by)
-            folder = run_dir(runs_root(out_dir), source.stem, tag=tag)
-            st.session_state["run_dir"] = folder
-            saved = save_transcript(transcript, folder, stem=f"{tag}_стенограмма")
-            st.session_state["saved_transcript"] = saved
-            # У того же файла вторая роль: стенограмма заседания, одна на
+            # Раскладка — своя папка прогона плюс стенограмма заседания в
+            # корень — лежит в пакете: её ждут одинаковой, чем бы расчёт ни
+            # запустили. Папку заседаний подставляем свою.
+            laid = lay_out_transcript(
+                transcript, out_dir, source.stem, settings,
+                meeting=st.session_state.get("meeting_date", ""),
+                meetings_dir=VKS_DIR,
+            )
+            st.session_state["run_dir"] = laid.folder
+            st.session_state["saved_transcript"] = laid.files
+            # У стенограммы вторая роль: стенограмма заседания, одна на
             # заседание — её выбирают, когда пересобирают протокол, и от неё
-            # же считают мерки. Прежде её переносили и переименовывали
-            # руками, а руками это делают через раз.
-            if _is_meeting(out_dir):
-                kept = keep_as_reference(saved, out_dir)
+            # же считают мерки. Сказать, легла она или там уже была, надо
+            # вслух: заменить лежащую может только человек.
+            if laid.meeting:
                 st.caption(
                     f"Стенограмма заседания положена в `{out_dir.name}`."
-                    if kept else
+                    if laid.reference else
                     f"Стенограмма заседания в `{out_dir.name}` уже была — "
                     "оставлена как есть. Заменить её может только человек: "
                     "вторая расшифровка бывает хуже первой."

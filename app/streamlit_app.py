@@ -68,6 +68,7 @@ from minuteforge.pipeline import (  # noqa: E402
     clear_cache,
     protocol_from_transcript,
     _free_name,
+    keep_as_latest,
     lay_out_transcript,
     _text_with_head,
     recorded_when,
@@ -1561,6 +1562,17 @@ if st.button("Собрать протокол", type="primary"):
             written["journal"] = notes
     st.session_state["saved_protocol"] = written
     st.session_state["protocol"] = protocol
+
+    # Свежий протокол — ещё и в корень папки заседания: иначе за ним ходят в
+    # «runs» и выбирают папку по дате, а нужен он обычно именно свежий.
+    # Поверх прежнего, в отличие от стенограммы заседания: это указатель на
+    # последний расчёт, и устаревший указатель хуже отсутствующего.
+    latest = keep_as_latest(written, out_dir, meetings_dir=VKS_DIR)
+    if latest is not None:
+        st.caption(
+            f"Свежий протокол положен в `{out_dir.name}` как "
+            f"`{latest.name}` — подписанный `протокол` рядом не затронут."
+        )
 
     # Промежуточное убирается здесь, а не сразу после распознавания: до
     # готового протокола кеш ещё может пригодиться, если голоса захотят

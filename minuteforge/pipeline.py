@@ -771,6 +771,11 @@ def save_transcript(
 #: пересобирают протокол, не распознавая заново.
 REFERENCE_STEM = "стенограмма"
 
+#: Как свежий протокол называется в корне папки заседания. Не «протокол»:
+#: так зовётся подписанный, и путать их нельзя — один документ, другой
+#: черновик машины. Имя говорит об этом прямо.
+LATEST_STEM = "последний-протокол"
+
 
 def keep_as_reference(
     files: dict[str, Path], meeting_dir: str | Path
@@ -818,6 +823,45 @@ def keep_as_reference(
             folder.name, ", ".join(sorted(p.name for p in copied.values())),
         )
     return copied
+
+
+def keep_as_latest(
+    files: dict[str, Path],
+    meeting_dir: str | Path,
+    *,
+    meetings_dir: str | Path | None = None,
+) -> Path | None:
+    """Кладёт свежий протокол в корень папки заседания, поверх прежнего.
+
+    Протокол лежит в своей папке прогона, и это правильно: прогонов бывает
+    несколько, они отличаются моделью и настройками, и затирать один другим
+    нельзя — сравнивать будет не с чем. Но за свежим протоколом из-за этого
+    приходилось ходить в «runs» и выбирать папку по дате, а нужен он обычно
+    именно свежий.
+
+    Поверх прежнего — в отличие от стенограммы заседания, которую не трогаем
+    никогда. Разница не в осторожности, а в смысле файла: стенограмма
+    заседания это документ, одна на заседание, и какой из расшифровок ею
+    быть, решает человек. А этот файл — указатель на последний расчёт, и
+    устаревший указатель хуже отсутствующего.
+
+    Подписанный протокол лежит рядом под своим именем и не затрагивается:
+    он зовётся «протокол», а этот — «последний-протокол».
+
+    :return: куда положили. None — папка не заседания, складывать некуда.
+    """
+    if not is_meeting(meeting_dir, meetings_dir=meetings_dir):
+        return None
+    source = (files or {}).get("protocol")
+    source = Path(source) if source else None
+    if source is None or not source.exists():
+        return None
+    folder = Path(meeting_dir).expanduser().resolve()
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f"{LATEST_STEM}{source.suffix}"
+    shutil.copy2(source, target)
+    logger.info("Свежий протокол положен в {}: {}", folder.name, target.name)
+    return target
 
 
 @dataclass

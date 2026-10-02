@@ -883,3 +883,83 @@ def test_the_meeting_transcript_is_never_replaced(tmp_path):
     assert (meeting / "стенограмма.json").read_text(encoding="utf-8") == (
         "своя, выбранная"
     )
+
+
+# --------------------------------------------- свежий протокол в корне
+
+def test_the_latest_protocol_is_kept_in_the_meeting_root(tmp_path):
+    """За свежим протоколом не надо ходить в «runs» и выбирать папку по дате."""
+    from minuteforge.pipeline import LATEST_STEM, keep_as_latest
+
+    meeting = tmp_path / "2026-10-01"
+    (meeting / "secretary").mkdir(parents=True)
+    run = meeting / "runs" / "2026-10-01_1150_qwen3_запись"
+    run.mkdir(parents=True)
+    document = run / "2026-10-01_1150_qwen3_протокол.md"
+    document.write_text("первый расчёт", encoding="utf-8")
+
+    where = keep_as_latest({"protocol": document}, meeting)
+
+    assert where == meeting / f"{LATEST_STEM}.md"
+    assert where.read_text(encoding="utf-8") == "первый расчёт"
+
+
+def test_the_latest_protocol_is_overwritten_by_the_next_run(tmp_path):
+    """Это указатель на последний расчёт, а не документ: устаревший указатель
+    хуже отсутствующего. Стенограмму заседания, наоборот, не трогаем никогда."""
+    from minuteforge.pipeline import LATEST_STEM, keep_as_latest
+
+    meeting = tmp_path / "2026-10-01"
+    (meeting / "secretary").mkdir(parents=True)
+    for number, text in ((1, "первый расчёт"), (2, "второй расчёт")):
+        run = meeting / "runs" / f"прогон-{number}"
+        run.mkdir(parents=True)
+        document = run / f"прогон-{number}_протокол.md"
+        document.write_text(text, encoding="utf-8")
+        keep_as_latest({"protocol": document}, meeting)
+
+    assert (meeting / f"{LATEST_STEM}.md").read_text(encoding="utf-8") == "второй расчёт"
+
+
+def test_the_signed_protocol_is_not_touched(tmp_path):
+    """Подписанный зовётся «протокол», свежий расчёт — «последний-протокол».
+    Один документ, другой черновик машины, и путать их нельзя."""
+    from minuteforge.pipeline import keep_as_latest
+
+    meeting = tmp_path / "2026-10-01"
+    (meeting / "secretary").mkdir(parents=True)
+    signed = meeting / "протокол.md"
+    signed.write_text("подписано", encoding="utf-8")
+    document = meeting / "runs" / "прогон_протокол.md"
+    document.parent.mkdir(parents=True)
+    document.write_text("черновик", encoding="utf-8")
+
+    keep_as_latest({"protocol": document}, meeting)
+
+    assert signed.read_text(encoding="utf-8") == "подписано"
+
+
+def test_nothing_is_kept_outside_a_meeting_folder(tmp_path):
+    """Папка не заседания — перевалочная, складывать там не во что."""
+    from minuteforge.pipeline import keep_as_latest
+
+    plain = tmp_path / "перевалочная"
+    plain.mkdir()
+    document = plain / "прогон_протокол.md"
+    document.write_text("черновик", encoding="utf-8")
+
+    assert keep_as_latest({"protocol": document}, plain) is None
+    assert [path.name for path in plain.iterdir()] == ["прогон_протокол.md"]
+
+
+def test_the_form_suffix_is_kept(tmp_path):
+    """Своя форма протокола бывает docx — расширение берётся от документа."""
+    from minuteforge.pipeline import LATEST_STEM, keep_as_latest
+
+    meeting = tmp_path / "2026-10-01"
+    (meeting / "secretary").mkdir(parents=True)
+    document = meeting / "runs" / "прогон_протокол.docx"
+    document.parent.mkdir(parents=True)
+    document.write_bytes(b"docx")
+
+    assert keep_as_latest({"protocol": document}, meeting) == meeting / f"{LATEST_STEM}.docx"

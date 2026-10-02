@@ -209,3 +209,30 @@ def test_without_the_meetings_folder_the_search_stays_where_the_file_is(tmp_path
 
     found, _ = meeting_near(source)
     assert found == meeting
+
+
+def test_our_own_protocol_is_not_a_material(tmp_path):
+    """Протокол прогона в корне заседания материалом не становится.
+
+    Имя его начинается с метки прогона, а не со слова «протокол», и прежняя
+    проверка — по началу имени — его пропускала. Попав в материалы, он
+    уходит моделью в тезисы: в подсказку распознаванию приходит готовый
+    ответ.
+    """
+    (tmp_path / "2026-10-01_1150_qwen3_протокол.docx").write_bytes(b"docx")
+    (tmp_path / "последний-протокол.docx").write_bytes(b"docx")
+    (tmp_path / "протокол.pdf").write_bytes(b"pdf")
+    assert materials_in(tmp_path) == []
+
+
+def test_an_extract_from_a_protocol_is_still_a_material(tmp_path):
+    """«Выписка из протокола» — присланное к совещанию, и терять её нельзя.
+
+    Поэтому проверяются концы имени, а не вхождение слова где угодно:
+    пропажа материала выглядит как «файлов не прислали».
+    """
+    (tmp_path / "Выписка из протокола № 5.docx").write_bytes(b"docx")
+    (tmp_path / "Доклад к протоколу.docx").write_bytes(b"docx")
+    assert [path.name for path in materials_in(tmp_path)] == [
+        "Выписка из протокола № 5.docx", "Доклад к протоколу.docx",
+    ]

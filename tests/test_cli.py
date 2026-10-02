@@ -510,3 +510,46 @@ def test_the_run_folder_is_named_by_the_day_of_the_meeting(
     runs = [path.name for path in (meeting / "runs").iterdir()]
     assert len(runs) == 1
     assert runs[0].startswith("2026-10-01_"), runs[0]
+
+
+def test_the_latest_protocol_appears_in_the_meeting_root(
+    anywhere_but_the_project, fake_llm, capsys
+):
+    """Протокол собран из стенограммы заседания — свежий лёг в корень.
+
+    Проверяется вся проводка, а не только сама укладка: прогон ложится в
+    «runs», а указатель на последний расчёт — в корень, рядом с материалами
+    секретаря, чтобы за ним не ходить в «runs».
+    """
+    meeting = anywhere_but_the_project["meetings_dir"] / "2026-10-01"
+    (meeting / "Секретарь").mkdir(parents=True)
+    (meeting / "Секретарь" / "повестка.docx").write_bytes(b"docx")
+    segments = meeting / "стенограмма.json"
+    segments.write_text(json.dumps(SEGMENTS, ensure_ascii=False), encoding="utf-8")
+
+    assert main(["protocol", str(segments), "--date", "01.10.2026"]) == 0
+
+    assert sorted((meeting / "runs").glob("*/*протокол.md")), "протокол прогона"
+    latest = meeting / "последний-протокол.md"
+    assert latest.exists(), "свежий протокол в корне заседания"
+    run = sorted((meeting / "runs").glob("*/*протокол.md"))[0]
+    assert latest.read_bytes() == run.read_bytes(), "копия, а не пересборка"
+    assert "последний-протокол.md" in capsys.readouterr().out, "о файле сказано вслух"
+
+
+def test_the_latest_protocol_is_not_fed_back_as_a_material(
+    anywhere_but_the_project, heard
+):
+    """Свежий протокол в корне не должен вернуться подсказкой распознаванию.
+
+    Он лежит рядом с материалами секретаря, и своя форма протокола бывает
+    docx — то есть ровно того вида, который считается материалом.
+    """
+    from minuteforge.meetings import materials_in
+
+    meeting = anywhere_but_the_project["meetings_dir"] / "2026-10-01"
+    (meeting / "Секретарь").mkdir(parents=True)
+    (meeting / "Секретарь" / "повестка.docx").write_bytes(b"docx")
+    (meeting / "последний-протокол.docx").write_bytes(b"docx")
+
+    assert [path.name for path in materials_in(meeting)] == ["повестка.docx"]

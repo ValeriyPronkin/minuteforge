@@ -35,6 +35,7 @@ from .people import merge_suggestions, mentioned_people, read_people
 from .pipeline import (
     Meeting,
     check_writable,
+    keep_as_latest,
     lay_out_transcript,
     models_tag,
     protocol_from_transcript,
@@ -377,6 +378,22 @@ def print_step(step) -> None:
 
 
 
+def _say_latest(written: dict, out: Path, settings: Settings) -> None:
+    """Свежий протокол в корень папки заседания — и сказать об этом.
+
+    Иначе за ним ходят в «runs» и выбирают папку по дате, а нужен он обычно
+    именно свежий.
+    """
+    latest = keep_as_latest(
+        written, out, meetings_dir=_dir(settings.meetings_dir)
+    )
+    if latest is not None:
+        print(
+            f"Свежий протокол положен в {out} как {latest.name} — "
+            "подписанный «протокол» рядом не затронут."
+        )
+
+
 def _say_reference(laid, out: Path) -> None:
     """Про стенограмму заседания — вслух.
 
@@ -508,10 +525,12 @@ def command_protocol(args: argparse.Namespace) -> int:
     folder, stem = _run_place(out, args, settings, args.segments.stem)
     print(f"Результат ляжет в {folder}")
     protocol = _build(transcript, args, settings, run_name=stem)
-    _report(protocol, save(
+    written = save(
         protocol, folder, stem=f"{stem}_протокол",
         template=args.template or settings.form_file,
-    ))
+    )
+    _report(protocol, written)
+    _say_latest(written, out, settings)
     return 0
 
 
@@ -579,11 +598,13 @@ def command_run(args: argparse.Namespace) -> int:
     # А подписан он своей меткой — с моделью, которая собрала поручения.
     _, stem = _run_place(out, args, settings, args.source.stem)
     protocol = _build(transcript, args, settings, run_name=stem)
-    _report(protocol, save(
+    written = save(
         protocol, laid.folder, stem=f"{stem}_протокол",
         with_transcript=False,
         template=args.template or settings.form_file,
-    ))
+    )
+    _report(protocol, written)
+    _say_latest(written, out, settings)
     return 0
 
 

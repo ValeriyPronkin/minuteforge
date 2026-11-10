@@ -1012,3 +1012,29 @@ def test_fresh_on_external_model_keeps_its_transcription(tmp_path, with_token):
     assert backend.calls == ["align", "diarize"]
     assert (steps / "transcription.json").exists()
     assert transcript.model == "gigaam-v3_e2e_ctc"
+
+
+def test_cache_dir_is_the_same_however_the_span_is_written(tmp_path):
+    """Интерфейс передавал отрезок строкой, конвейер — секундами, и папки
+    выходили разные: очистка после протокола искала не ту."""
+    from minuteforge.pipeline import cache_dir_for
+
+    audio = make_audio(tmp_path, "meeting.wav")
+    work = tmp_path / "work"
+    as_text = cache_dir_for(audio, work, start="1:00:00", end="2:17:00")
+    assert as_text == cache_dir_for(audio, work, start=3600.0, end=8220.0)
+    assert as_text == cache_dir_for(audio, work, start=3600, end="8220")
+    assert cache_dir_for(audio, work, start="", end=None) == cache_dir_for(audio, work)
+
+
+def test_app_and_pipeline_agree_on_the_cache_dir(tmp_path, with_token):
+    """Ровно то, что делает интерфейс: запоминает папку по строкам из полей,
+    а конвейер кладёт шаги по секундам. Это должна быть одна папка."""
+    from minuteforge.pipeline import cache_dir_for
+
+    audio = make_audio(tmp_path, "meeting.wav")
+    work = tmp_path / "work"
+    remembered = cache_dir_for(audio, work, start="0:10", end=None)
+    transcribe_meeting(audio, Settings(device="cpu"), backend=FakeBackend(),
+                       work_dir=work, start="0:10")
+    assert (remembered / "large-v3" / "segments.json").exists()

@@ -1205,9 +1205,6 @@ if source_path is not None or uploaded is not None:
             # Копия видео — самое тяжёлое в рабочей папке. Помним, что она
             # наша, чтобы убрать вместе с остальным промежуточным.
             st.session_state["uploaded_copy"] = source
-        st.session_state["cache_dir"] = cache_dir_for(
-            source, WORK_DIR, start=from_time or None, end=to_time or None
-        )
         # Считаем эту запись — её заседание и становится текущим: прежняя
         # стенограмма в памяти сейчас сменится на её собственную.
         st.session_state["meeting_source"] = str(source)
@@ -1217,6 +1214,11 @@ if source_path is not None or uploaded is not None:
         free_the_card(settings)
         live = Live("Готовлюсь…")
         try:
+            # Внутри try: время отрезка разбирается уже здесь, и опечатка в
+            # нём должна стать сообщением, а не трассировкой.
+            st.session_state["cache_dir"] = cache_dir_for(
+                source, WORK_DIR, start=from_time or None, end=to_time or None
+            )
             transcript = transcribe_meeting(
                 source, settings, work_dir=WORK_DIR, progress=live, fresh=fresh,
                 start=from_time or None, end=to_time or None,

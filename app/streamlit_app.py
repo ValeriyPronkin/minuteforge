@@ -105,6 +105,7 @@ from minuteforge.transcribe import (  # noqa: E402
     MissingToken,
     RecognitionError,
     check_model_access,
+    preselect_model,
 )
 
 # Свой файл, а нет своего — образец из репозитория. Свой в репозитории не
@@ -690,11 +691,15 @@ with st.sidebar:
     # настройка в файле и настройка в интерфейсе расходятся, и человек не
     # понимает, какая из них считает.
     ASR_MODELS = ["tiny", "base", "small", "medium", "large-v3"]
-    default_model = BASE.asr_model if BASE.asr_model in ASR_MODELS else "large-v3"
+    # Незнакомое имя не подменяется: см. preselect_model. Пока модель не
+    # выбрана, кнопка «Распознать» неактивна.
+    preset, unknown_model = preselect_model(BASE.asr_model, ASR_MODELS)
+    if unknown_model:
+        st.warning(unknown_model)
     asr_model = st.selectbox(
         "Модель Whisper",
         ASR_MODELS,
-        index=ASR_MODELS.index(default_model),
+        index=preset,
         help="Крупнее — точнее и заметно дольше. По умолчанию large-v3: она "
         "разбирает фамилии и цифры, на которых medium ошибается, а ошибка "
         "расшифровки въезжает прямо в текст поручения. Просит около 5 ГБ "
@@ -976,7 +981,10 @@ with st.sidebar:
 # заметить это было нельзя, потому что умолчания в файле и в коде совпадают.
 settings = replace(
     BASE,
-    asr_model=asr_model,
+    # Не выбрано — остаётся то, что в файле: распознавание при этом
+    # заблокировано, а подписывать загруженную стенограмму чужой моделью
+    # незачем.
+    asr_model=asr_model or BASE.asr_model,
     language=language,
     speakers=int(speakers) or None,
     llm_base_url=llm_url,
@@ -1183,7 +1191,9 @@ if source_path is not None or uploaded is not None:
         "пересчитать эту запись с нуля.",
     )
 
-    if st.button("Распознать", type="primary"):
+    if asr_model is None:
+        st.caption("Выберите модель распознавания слева — см. предупреждение там.")
+    if st.button("Распознать", type="primary", disabled=asr_model is None):
         WORK_DIR.mkdir(parents=True, exist_ok=True)
         if source_path is not None:
             # Ничего не копируем: расчёт читает файл там, где он лежит.

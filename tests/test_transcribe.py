@@ -6,6 +6,7 @@ from minuteforge.config import HF_TOKEN_ENV, Settings
 from minuteforge.transcribe import (
     ASR_META,
     model_dir,
+    preselect_model,
     vram_left,
     MissingToken,
     RecognitionError,
@@ -737,3 +738,29 @@ def test_external_model_is_only_taken_from_cache(audio, with_token, tmp_path):
 ])
 def test_model_dir_is_a_safe_folder_name(name, folder):
     assert model_dir(name) == folder
+
+
+# --- Модель из config.yaml в интерфейсе --------------------------------------
+
+UI_MODELS = ["tiny", "base", "small", "medium", "large-v3"]
+
+
+def test_known_configured_model_is_preselected():
+    assert preselect_model("medium", UI_MODELS) == (3, "")
+
+
+@pytest.mark.parametrize("configured", ["gigaam-v3_e2e_rnnt", "large-v2", r"D:\models\свой"])
+def test_unknown_configured_model_is_not_swapped_silently(configured):
+    """Раньше незнакомое имя молча становилось large-v3: в файле одна модель,
+    считала другая, и по интерфейсу этого было не видно."""
+    index, warning = preselect_model(configured, UI_MODELS)
+    assert index is None, "заранее не выбирается ничего — ни large-v3, ни другая"
+    assert configured in warning
+    assert "не запустится" in warning
+
+
+def test_warning_on_gigaam_points_to_the_command_line():
+    _, warning = preselect_model("gigaam-v3_e2e_ctc", UI_MODELS)
+    assert "minuteforge run --model gigaam-v3_e2e_ctc" in warning
+    _, other = preselect_model("large-v2", UI_MODELS)
+    assert "gigaam" not in other

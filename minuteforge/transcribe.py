@@ -425,6 +425,19 @@ def recognize(
     )
     if "transcription.json" in result.reused:
         _restore_signature(raw, result)
+        if ASR_META in raw and not external:
+            wanted = read_hints(settings.asr_hints_file)
+            if wanted != result.hints:
+                # Подсказки входят в расшифровку, а в отпечаток кэша — нет:
+                # положили подсказку в папку заседания после прогона — и
+                # повторный запуск молча взял бы расшифровку без неё.
+                note = (
+                    "расшифровка взята из сохранённой и сделана с другими "
+                    "подсказками, чем заданы сейчас; чтобы распознать с "
+                    "нынешними — «считать заново»"
+                )
+                logger.warning(note)
+                result.fallbacks.append(note)
     result.language = raw.get("language") or settings.language
 
     aligned = _step(

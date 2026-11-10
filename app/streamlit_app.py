@@ -48,6 +48,8 @@ from minuteforge.meetings import (  # noqa: E402
     is_meeting,
     materials_in,
     meeting_folders,
+    HINTS_NAME,
+    hints_in,
     meeting_for,
     recordings_in,
     runs_root as _runs_root,
@@ -66,6 +68,7 @@ from minuteforge.pipeline import (  # noqa: E402
     cache_size,
     check_writable,
     clear_cache,
+    hints_for,
     protocol_from_transcript,
     _free_name,
     keep_as_latest,
@@ -345,8 +348,11 @@ def prepare_materials(paths, uploads) -> list[str]:
         _, prose = prep.load_glossary(GLOSSARY)
         hints = prep.build_asr_hints(prose, 550, found) if prose else ""
         if hints:
-            st.session_state["asr_hints"] = hints
-            report.append(f"Подсказка распознаванию: {len(hints)} симв.")
+            # Не в «asr_hints»: там — с какими подсказками распознано на
+            # самом деле. Собранная идёт в распознавание только файлом в папке
+            # заседания — см. ниже, где он сохраняется.
+            st.session_state["prepared_hints"] = hints
+            report.append(f"Подсказка распознаванию собрана: {len(hints)} симв.")
         elif not GLOSSARY.exists():
             report.append(f"Глоссарий не найден: `{GLOSSARY}` — подсказка не собрана.")
         if found:
@@ -648,6 +654,30 @@ with st.sidebar:
 
     if roster_ready is not None:
         st.caption(f"Список участников: `{roster_ready.name}` из папки заседания.")
+
+    # Собранная из материалов подсказка — тоже файлом в папку заседания, в
+    # prep/: оттуда её берёт распознавание, и из интерфейса, и из командной
+    # строки. Прежде она только показывалась, а распознавание читало файл из
+    # настроек. Лежащую не трогаем: её мог собрать prepare_meeting.py или
+    # поправить аналитик.
+    built_hints = st.session_state.get("prepared_hints")
+    if built_hints and materials_dir is not None and hints_in(materials_dir) is None:
+        target = materials_dir / "prep" / HINTS_NAME
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(built_hints + "\n", encoding="utf-8")
+        except OSError as exc:
+            st.caption(
+                f"Подсказка распознаванию собрана, но сохранить не вышло: "
+                f"{exc.strerror or exc} — распознавание её не увидит."
+            )
+        else:
+            st.caption(f"Подсказка распознаванию сохранена: `prep/{HINTS_NAME}` в папке заседания.")
+    elif built_hints and materials_dir is None:
+        st.caption(
+            "Подсказка распознаванию собрана, но папки заседания нет — "
+            "распознавание её не увидит."
+        )
     roster_file = st.file_uploader(
         "Список участников (csv или txt)",
         type=["csv", "txt"],
@@ -733,29 +763,23 @@ with st.sidebar:
             "полем directory_file."
         )
 
-    # Подсказки распознаванию — по той же причине здесь, а не в середине
-    # расчёта: узнать, что файл не подхватился, надо до сорока минут
-    # распознавания, а не после.
+    # Подсказки распознаванию берутся из папки заседания записи
+    # (prep/asr_hints.txt); здесь — только запасной файл из настроек, на
+    # случай, когда у заседания своих нет. Что пойдёт на самом деле, видно у
+    # кнопки «Распознать»: это зависит от выбранной записи.
     if BASE.asr_hints_file:
         hinted = read_hints(BASE.asr_hints_file)
         if hinted:
             st.caption(
-                f"Подсказки распознаванию: {len(hinted.split())} слов "
-                f"{'фразой' if hinted.count('.') > 1 or ',' not in hinted else 'списком'} — "
-                f"`{BASE.asr_hints_file}`"
+                f"Запасные подсказки распознаванию: {len(hinted.split())} слов — "
+                f"`{BASE.asr_hints_file}`. Идут, когда в папке заседания нет "
+                f"prep/{HINTS_NAME}."
             )
         else:
             st.warning(
-                f"Подсказки не прочитаны: `{BASE.asr_hints_file}` не найден "
-                "или пуст. Распознавание пойдёт без них — фамилии и термины "
-                "будут коверкаться чаще."
+                f"Запасные подсказки не прочитаны: `{BASE.asr_hints_file}` не "
+                "найден или пуст."
             )
-    else:
-        st.caption(
-            "Подсказки распознаванию не заданы: фамилии участников и "
-            "отраслевые слова Whisper будет разбирать на слух. Файл "
-            "указывается в config.yaml полем asr_hints_file."
-        )
 
     st.header("Модель для поручений")
 
@@ -1191,6 +1215,22 @@ if source_path is not None or uploaded is not None:
         "пересчитать эту запись с нуля.",
     )
 
+    if source_path is not None:
+        hints_file, origin = hints_for(
+            source_path, settings, meeting=_meeting_for(source_path)[0]
+        )
+        hinted = read_hints(hints_file) if hints_file else ""
+        if hinted:
+            st.caption(
+                f"Подсказки распознаванию {origin}: {len(hinted.split())} слов — "
+                f"`{hints_file}`"
+            )
+        else:
+            st.warning(
+                f"Подсказок распознаванию нет: в папке заседания нет "
+                f"prep/{HINTS_NAME}, запасного файла в настройках тоже. Фамилии "
+                "и термины будут коверкаться чаще."
+            )
     if asr_model is None:
         st.caption("Выберите модель распознавания слева — см. предупреждение там.")
     if st.button("Распознать", type="primary", disabled=asr_model is None):
@@ -1222,6 +1262,7 @@ if source_path is not None or uploaded is not None:
             transcript = transcribe_meeting(
                 source, settings, work_dir=WORK_DIR, progress=live, fresh=fresh,
                 start=from_time or None, end=to_time or None,
+                meeting=_meeting_for(source)[0],
             )
             live.finish("Распознавание закончено")
             st.session_state["segments"] = [

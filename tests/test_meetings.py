@@ -236,3 +236,17 @@ def test_an_extract_from_a_protocol_is_still_a_material(tmp_path):
     assert [path.name for path in materials_in(tmp_path)] == [
         "Выписка из протокола № 5.docx", "Доклад к протоколу.docx",
     ]
+
+
+def test_hints_in_prefers_prep_and_skips_empty(tmp_path):
+    from minuteforge.meetings import hints_in
+
+    assert hints_in(None) is None
+    assert hints_in(tmp_path) is None
+    (tmp_path / "asr_hints.txt").write_text("Прежняя раскладка.\n", encoding="utf-8")
+    assert hints_in(tmp_path) == tmp_path / "asr_hints.txt"
+    (tmp_path / "prep").mkdir()
+    (tmp_path / "prep" / "asr_hints.txt").write_text("", encoding="utf-8")
+    assert hints_in(tmp_path) == tmp_path / "asr_hints.txt", "пустой в prep не в счёт"
+    (tmp_path / "prep" / "asr_hints.txt").write_text("Новая раскладка.\n", encoding="utf-8")
+    assert hints_in(tmp_path) == tmp_path / "prep" / "asr_hints.txt"

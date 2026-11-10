@@ -50,6 +50,33 @@ MEDIA_SUFFIXES = {
 UP = 2
 
 
+#: Подсказка распознаванию для заседания. Кладёт её prepare_meeting.py (или
+#: аналитик руками) в «prep» папки заседания; у заседаний прежней раскладки
+#: она лежит прямо в папке.
+HINTS_NAME = "asr_hints.txt"
+
+
+def hints_in(folder: Path | None) -> Path | None:
+    """Подсказка распознаванию из папки заседания — или None, если её нет.
+
+    Заседание определяется записью, и подсказки у каждого свои: фамилии
+    докладчиков и слова этой ВКС. Прежде распознавание читало только
+    asr_hints_file из настроек — один путь на все заседания, — и подсказка,
+    положенная в папку заседания, до распознавания не доходила вовсе.
+    Пустой файл не в счёт: «положили, но не заполнили» — не повод отказаться
+    от подсказки из настроек.
+    """
+    if folder is None:
+        return None
+    for place in (Path(folder) / "prep" / HINTS_NAME, Path(folder) / HINTS_NAME):
+        try:
+            if place.is_file() and place.read_text(encoding="utf-8-sig").strip():
+                return place
+        except (OSError, UnicodeDecodeError):
+            continue
+    return None
+
+
 def materials_in(folder: Path) -> list[Path]:
     """Документы секретаря по заседанию.
 

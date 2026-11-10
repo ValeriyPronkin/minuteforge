@@ -62,7 +62,7 @@ from .transcribe import (
     report,
 )
 
-from .meetings import is_meeting, runs_root
+from .meetings import hints_in, is_meeting, meeting_for, runs_root
 
 #: Расширения, которые считаем видео: из них сперва извлекается звук.
 VIDEO_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v"}
@@ -181,6 +181,39 @@ def recorded_when(source: str | Path) -> dates.Recorded | None:
     return dates.Recorded(changed.date(), source="по времени файла на диске")
 
 
+def hints_for(
+    source: Path,
+    settings: Settings,
+    *,
+    meeting: Path | None = None,
+) -> tuple[Path | None, str]:
+    """Какой файл подсказок пойдёт в распознавание этой записи, и откуда он.
+
+    Сперва — подсказка заседания, к которому относится запись (prep/asr_hints.txt
+    в его папке): заседание определяется записью, и подсказки у каждого свои.
+    Нет её — asr_hints_file из настроек, общий запасной. Нет и его — без
+    подсказок. Второе значение — откуда взято, для журнала и интерфейса.
+
+    :param meeting: папка заседания, если вызывающий её уже знает. Нет —
+        считается от записи тем же правилом, что и папка для результата.
+    """
+    if meeting is None:
+        meeting, _ = meeting_for(
+            Path(source).expanduser().resolve(),
+            meetings_dir=Path(settings.meetings_dir).expanduser().resolve(),
+            not_meetings=(
+                Path(settings.input_dir).expanduser().resolve(),
+                Path(settings.work_dir).expanduser().resolve(),
+            ),
+        )
+    own = hints_in(meeting)
+    if own is not None:
+        return own, f"из папки заседания «{meeting.name}»"
+    if settings.asr_hints_file:
+        return Path(settings.asr_hints_file), "из настроек (asr_hints_file)"
+    return None, "не заданы"
+
+
 def transcribe_meeting(
     source: str | Path,
     settings: Settings | None = None,
@@ -192,6 +225,7 @@ def transcribe_meeting(
     fresh: bool = False,
     start: str | float | None = None,
     end: str | float | None = None,
+    meeting: Path | None = None,
 ) -> Transcript:
     """Из записи — стенограмма. Самый долгий шаг, и единственный с видеокартой.
 
@@ -205,6 +239,8 @@ def transcribe_meeting(
         час работы видеокарты впустую. Время в стенограмме при этом остаётся
         от начала записи, а не от начала куска: иначе по нему не найти место
         в исходном видео.
+    :param meeting: папка заседания, если она уже известна; подсказки
+        распознаванию берутся из неё (см. :func:`hints_for`).
     """
     settings = settings or Settings()
     source = Path(source)
@@ -246,6 +282,10 @@ def transcribe_meeting(
             duration=(to_second - (from_second or 0)) if to_second else None,
         )
         report(progress, Step(name="audio", title=title, done=True, share=0.05))
+
+    hints_file, origin = hints_for(source, settings, meeting=meeting)
+    logger.info("Подсказки распознаванию {}{}", origin, f": {hints_file}" if hints_file else "")
+    settings = replace(settings, asr_hints_file=hints_file)
 
     recognition = recognize(
         audio, settings, backend=backend, cache_dir=cache,

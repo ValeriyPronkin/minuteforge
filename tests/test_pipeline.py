@@ -1038,3 +1038,99 @@ def test_app_and_pipeline_agree_on_the_cache_dir(tmp_path, with_token):
     transcribe_meeting(audio, Settings(device="cpu"), backend=FakeBackend(),
                        work_dir=work, start="0:10")
     assert (remembered / "large-v3" / "segments.json").exists()
+
+
+# --- Подсказки распознаванию — из папки заседания ---------------------------
+
+MEETING_HINT = "Заседание штаба по обращению с отходами. Докладывают Ковач и Семенов.\n"
+GLOBAL_HINT = "Совещание по работе регоператора и ликвидации навалов.\n"
+
+
+class HintsBackend(FakeBackend):
+    """Запоминает, с какой подсказкой его позвали."""
+
+    def transcribe(self, audio, **kwargs):
+        self.hints = kwargs.get("hints", "")
+        return super().transcribe(audio, **kwargs)
+
+
+def meeting_with_record(tmp_path, *, hint=MEETING_HINT, where="prep"):
+    """Папка заседания на «другом диске»: запись и, если надо, подсказка."""
+    meeting = tmp_path / "I" / "2026-10-29"
+    (meeting / "runs").mkdir(parents=True)
+    if hint is not None:
+        folder = meeting / where if where else meeting
+        folder.mkdir(exist_ok=True)
+        (folder / "asr_hints.txt").write_text(hint, encoding="utf-8")
+    return meeting, make_audio(meeting, "запись.wav")
+
+
+def test_hints_come_from_the_meeting_of_the_record(tmp_path, with_token):
+    """Аналитик кладёт подсказку в папку заседания. Прежде распознавание
+    читало только asr_hints_file из настроек — один путь на все заседания —
+    и подсказка заседания до него не доходила."""
+    _, record = meeting_with_record(tmp_path)
+    fallback = tmp_path / "общая.txt"
+    fallback.write_text(GLOBAL_HINT, encoding="utf-8")
+    backend = HintsBackend()
+    transcript = transcribe_meeting(
+        record, Settings(device="cpu", asr_hints_file=fallback),
+        backend=backend, work_dir=tmp_path / "work",
+    )
+    assert "Ковач" in backend.hints, "подсказка заседания важнее общей"
+    assert "Ковач" in transcript.hints
+
+
+def test_settings_hints_are_the_fallback(tmp_path, with_token):
+    _, record = meeting_with_record(tmp_path, hint=None)
+    fallback = tmp_path / "общая.txt"
+    fallback.write_text(GLOBAL_HINT, encoding="utf-8")
+    backend = HintsBackend()
+    transcribe_meeting(record, Settings(device="cpu", asr_hints_file=fallback),
+                       backend=backend, work_dir=tmp_path / "work")
+    assert "регоператора" in backend.hints
+
+
+def test_old_layout_hints_lie_in_the_meeting_folder_itself(tmp_path, with_token):
+    _, record = meeting_with_record(tmp_path, where="")
+    backend = HintsBackend()
+    transcribe_meeting(record, Settings(device="cpu"), backend=backend, work_dir=tmp_path / "work")
+    assert "Ковач" in backend.hints
+
+
+def test_empty_meeting_hints_do_not_cancel_the_fallback(tmp_path):
+    from minuteforge.pipeline import hints_for
+
+    meeting, record = meeting_with_record(tmp_path, hint="  \n")
+    fallback = tmp_path / "общая.txt"
+    fallback.write_text(GLOBAL_HINT, encoding="utf-8")
+    found, origin = hints_for(record, Settings(asr_hints_file=fallback), meeting=meeting)
+    assert found == fallback
+    assert "настроек" in origin
+
+
+def test_meeting_hints_found_without_being_told_the_meeting(tmp_path):
+    """Командная строка папку заседания не передаёт — она считается от
+    записи тем же правилом, что и папка для результата."""
+    from minuteforge.pipeline import hints_for
+
+    meeting, record = meeting_with_record(tmp_path)
+    found, origin = hints_for(record, Settings())
+    assert found == meeting / "prep" / "asr_hints.txt"
+    assert meeting.name in origin
+
+
+def test_cached_transcription_with_other_hints_is_flagged(tmp_path, with_token):
+    """Подсказку положили после прогона — повторный запуск берёт расшифровку
+    из кэша, сделанную без неё. Молча этого делать нельзя."""
+    meeting, record = meeting_with_record(tmp_path, hint=None)
+    work = tmp_path / "work"
+    transcribe_meeting(record, Settings(device="cpu"), backend=FakeBackend(), work_dir=work)
+
+    (meeting / "prep").mkdir()
+    (meeting / "prep" / "asr_hints.txt").write_text(MEETING_HINT, encoding="utf-8")
+    backend = FakeBackend()
+    transcript = transcribe_meeting(record, Settings(device="cpu"), backend=backend, work_dir=work)
+    assert "transcribe" not in backend.calls
+    assert transcript.hints == "", "в реквизитах — то, с чем распознано на самом деле"
+    assert any("другими подсказками" in note for note in transcript.notes)

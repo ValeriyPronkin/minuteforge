@@ -132,6 +132,36 @@ class Recognition:
     hints: str = ""
 
 
+#: Под каким ключом в ``transcription.json`` лежат реквизиты распознавания.
+#: Без них взятая из кэша расшифровка безымянна: протокол не знает, какой
+#: моделью и с какими подсказками она сделана.
+ASR_META = "minuteforge_asr"
+
+#: Приставка моделей, которые считаются вне этого окружения — сейчас GigaAM
+#: (scripts/asr_bench.py, своё окружение со своими torch и pyannote). Здесь
+#: такую расшифровку можно только взять из кэша.
+EXTERNAL_PREFIX = "gigaam-"
+
+
+def model_dir(model: str) -> str:
+    """Подпапка кэша для модели распознавания.
+
+    У каждой модели свои шаги: прежде ``transcription.json`` лежал в общей
+    папке записи, и после смены модели распознавание брало старую
+    расшифровку, а выравнивание и разметка голосов шли поверх неё. Протокол
+    при этом подписывался новой моделью. Подпапка нужна всем трём шагам, а
+    не только первому: выравнивание и разметка посчитаны по расшифровке и
+    без неё ничего не стоят.
+
+    Имя модели бывает и путём к своей дообученной — из него оставляем
+    только то, что годится в имя папки на любой системе.
+
+    Повторено в scripts/asr_bench.py, который ставится без minuteforge;
+    совпадение держит тест.
+    """
+    return re.sub(r"[^\w.-]+", "_", model.strip()).strip("._") or "default"
+
+
 def free_vram(torch_module: Any | None = None) -> bool:
     """Возвращает видеопамять, занятую предыдущим шагом.
 
@@ -332,9 +362,28 @@ def recognize(
             "без имён, но поручения извлекутся: токен нужен только этому шагу."
         )
 
+    model = settings.asr_model
+    external = model.startswith(EXTERNAL_PREFIX)
+    cache = Path(cache_dir) / model_dir(model) if cache_dir else None
+    if cache is not None and (cache.parent / "transcription.json").exists():
+        # Старый кэш, общий для всех моделей. Какой моделью он посчитан, не
+        # записано — выдать его за заказанную было бы той самой ошибкой.
+        logger.warning(
+            "В {} лежат шаги от прежней раскладки: неизвестно, какой моделью они "
+            "посчитаны, поэтому не используются. Шаги модели {} — в подпапке {}.",
+            cache.parent, model, cache.name,
+        )
+    if external and not (cache is not None and (cache / "transcription.json").exists()):
+        # Здесь, а не на шаге: иначе по лестнице моделей распознавание тихо
+        # ушло бы в Whisper, и протокол «GigaAM» оказался бы протоколом medium.
+        raise RecognitionError(
+            f"Модель {model} в этом окружении не запускается. Сначала распознайте "
+            "запись scripts/asr_bench.py в окружении GigaAM — он положит "
+            f"transcription.json в {cache if cache is not None else 'папку шагов записи'}."
+        )
+
     backend = backend or _whisperx_backend()
     device = resolve_device(settings.device)
-    cache = Path(cache_dir) if cache_dir else None
     result = Recognition(device=device)
 
     # Часть шагов идёт на другом устройстве — см. torch_device.
@@ -349,8 +398,10 @@ def recognize(
     logger.info("Распознавание: модель {}, устройство {}", settings.asr_model, device)
     raw = _step(
         cache, "transcription.json", result, progress, "transcribe",
-        lambda: _transcribe_with_fallback(backend, str(audio), settings, device, result),
+        lambda: _signed(_transcribe_with_fallback(backend, str(audio), settings, device, result), result),
     )
+    if "transcription.json" in result.reused:
+        _restore_signature(raw, result)
     result.language = raw.get("language") or settings.language
 
     aligned = _step(
@@ -380,6 +431,33 @@ def recognize(
     result.segments = assigned.get("segments", [])
     logger.info("Готово: сегментов {}", len(result.segments))
     return result
+
+
+def _signed(raw: dict, result: Recognition) -> dict:
+    """Расшифровка с реквизитами: кем, какой порцией, с какими подсказками."""
+    return {
+        **raw,
+        ASR_META: {
+            "model": result.asr_model,
+            "batch_size": result.batch_size,
+            "hints": result.hints,
+            "fallbacks": list(result.fallbacks),
+        },
+    }
+
+
+def _restore_signature(raw: dict, result: Recognition) -> None:
+    """Реквизиты расшифровки, взятой из кэша.
+
+    Без этого повторный запуск печатал протокол без модели и без подсказок,
+    хотя расшифровка была сделана и той и другими. В кэше прежних версий
+    реквизитов нет — тогда остаётся пусто, как и было.
+    """
+    meta = raw.get(ASR_META) or {}
+    result.asr_model = str(meta.get("model") or "")
+    result.batch_size = int(meta.get("batch_size") or 0)
+    result.hints = str(meta.get("hints") or "")
+    result.fallbacks = [str(n) for n in meta.get("fallbacks") or []]
 
 
 def _transcribe_with_fallback(

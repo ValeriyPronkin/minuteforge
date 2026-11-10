@@ -4,6 +4,8 @@ import pytest
 
 from minuteforge.config import HF_TOKEN_ENV, Settings
 from minuteforge.transcribe import (
+    ASR_META,
+    model_dir,
     vram_left,
     MissingToken,
     RecognitionError,
@@ -102,7 +104,9 @@ def test_steps_are_saved_and_reused(audio, with_token, tmp_path):
     cache = tmp_path / "шаги"
     first = FakeBackend()
     recognize(audio, Settings(device="cpu"), backend=first, cache_dir=cache)
-    assert {p.name for p in cache.iterdir()} == {"transcription.json", "aligned.json", "segments.json"}
+    assert {p.name for p in (cache / "large-v3").iterdir()} == {
+        "transcription.json", "aligned.json", "segments.json"
+    }
 
     second = FakeBackend()
     result = recognize(audio, Settings(device="cpu"), backend=second, cache_dir=cache)
@@ -113,8 +117,8 @@ def test_steps_are_saved_and_reused(audio, with_token, tmp_path):
 
 def test_partial_cache_continues_from_where_it_stopped(audio, with_token, tmp_path):
     cache = tmp_path / "шаги"
-    cache.mkdir()
-    (cache / "transcription.json").write_text(
+    (cache / "large-v3").mkdir(parents=True)
+    (cache / "large-v3" / "transcription.json").write_text(
         json.dumps({"segments": [{"text": "Было"}], "language": "ru"}), encoding="utf-8"
     )
     backend = FakeBackend()
@@ -625,3 +629,111 @@ def test_pyannote_memory_error_is_out_of_memory():
         "Try with a smaller value until memory error disappears."
     )
     assert is_out_of_memory(beef)
+
+
+# --- Кэш знает, какой моделью посчитан -------------------------------------
+
+
+class HintedBackend(FakeBackend):
+    """Распознаёт с отметкой модели в тексте — чтобы видеть, чья расшифровка."""
+
+    def transcribe(self, audio, *, model, language, batch_size, device, hints=""):
+        self.calls.append("transcribe")
+        return {"segments": [{"text": f"Сказано {model}."}], "language": language}
+
+    def align(self, segments, *, language, audio, device):
+        self.calls.append("align")
+        return {"segments": [{**s, "start": 0.0, "end": 2.0} for s in segments]}
+
+    def diarize(self, audio, aligned, *, token, speakers, device):
+        self.calls.append("diarize")
+        return {"segments": [{**s, "speaker": "SPEAKER_00"} for s in aligned["segments"]]}
+
+
+def test_other_model_does_not_reuse_foreign_transcription(audio, with_token, tmp_path):
+    """Смена модели раньше тихо брала прежнюю расшифровку: файл назывался так
+    же, а какой моделью он посчитан, нигде не стояло. Протокол подписывался
+    новой моделью, а текст был от старой."""
+    cache = tmp_path / "шаги"
+    recognize(audio, Settings(device="cpu", asr_model="large-v3"),
+              backend=HintedBackend(), cache_dir=cache)
+
+    second = HintedBackend()
+    result = recognize(audio, Settings(device="cpu", asr_model="medium"),
+                       backend=second, cache_dir=cache)
+    assert second.calls == ["transcribe", "align", "diarize"], "чужие шаги не берутся"
+    assert result.segments[0]["text"] == "Сказано medium."
+    assert result.asr_model == "medium"
+
+    # И обратно: шаги первой модели целы и берутся.
+    third = HintedBackend()
+    back = recognize(audio, Settings(device="cpu", asr_model="large-v3"),
+                     backend=third, cache_dir=cache)
+    assert third.calls == []
+    assert back.segments[0]["text"] == "Сказано large-v3."
+
+
+def test_reused_transcription_keeps_its_model_and_hints(audio, with_token, tmp_path):
+    hints = tmp_path / "подсказки.txt"
+    hints.write_text("Иркутская область, Ангарск, Саянск, Усть-Кут — сегодня на связи.\n",
+                     encoding="utf-8")
+    settings = Settings(device="cpu", asr_hints_file=hints)
+    cache = tmp_path / "шаги"
+    first = recognize(audio, settings, backend=FakeBackend(), cache_dir=cache)
+    assert first.hints
+
+    again = recognize(audio, settings, backend=FakeBackend(), cache_dir=cache)
+    assert "transcription.json" in again.reused
+    assert again.asr_model == "large-v3", "из кэша — но не безымянная"
+    assert again.hints == first.hints
+    assert again.batch_size == first.batch_size
+
+
+def test_old_flat_cache_is_not_trusted(audio, with_token, tmp_path):
+    """В старой раскладке не записано, какой моделью считали, — значит,
+    выдавать её за заказанную модель нельзя."""
+    cache = tmp_path / "шаги"
+    cache.mkdir()
+    (cache / "transcription.json").write_text(
+        json.dumps({"segments": [{"text": "Неизвестно чьё"}], "language": "ru"}),
+        encoding="utf-8",
+    )
+    backend = HintedBackend()
+    result = recognize(audio, Settings(device="cpu"), backend=backend, cache_dir=cache)
+    assert backend.calls[0] == "transcribe"
+    assert result.segments[0]["text"] == "Сказано large-v3."
+
+
+def test_external_model_is_only_taken_from_cache(audio, with_token, tmp_path):
+    """GigaAM считается в своём окружении. Здесь его расшифровку можно только
+    взять готовой — и ни в коем случае не досчитать Whisper'ом по лестнице."""
+    cache = tmp_path / "шаги"
+    backend = HintedBackend()
+    with pytest.raises(RecognitionError, match="asr_bench"):
+        recognize(audio, Settings(device="cpu", asr_model="gigaam-v3_e2e_rnnt"),
+                  backend=backend, cache_dir=cache)
+    assert backend.calls == []
+
+    folder = cache / model_dir("gigaam-v3_e2e_rnnt")
+    folder.mkdir(parents=True)
+    (folder / "transcription.json").write_text(json.dumps({
+        "segments": [{"text": "Сказано гигаам.", "start": 0.0, "end": 2.0}],
+        "language": "ru",
+        ASR_META: {"model": "gigaam-v3_e2e_rnnt", "batch_size": 16, "hints": "", "fallbacks": []},
+    }), encoding="utf-8")
+    result = recognize(audio, Settings(device="cpu", asr_model="gigaam-v3_e2e_rnnt"),
+                       backend=backend, cache_dir=cache)
+    assert backend.calls == ["align", "diarize"]
+    assert result.asr_model == "gigaam-v3_e2e_rnnt"
+    assert result.hints == "", "у GigaAM подсказок нет, и протокол не должен их приписать"
+    assert result.segments[0]["text"] == "Сказано гигаам."
+
+
+@pytest.mark.parametrize("name, folder", [
+    ("large-v3", "large-v3"),
+    ("gigaam-v3_e2e_ctc", "gigaam-v3_e2e_ctc"),
+    (r"D:\models\мой whisper", "D_models_мой_whisper"),
+    ("", "default"),
+])
+def test_model_dir_is_a_safe_folder_name(name, folder):
+    assert model_dir(name) == folder

@@ -203,10 +203,10 @@ def test_steps_are_cached_between_runs(audio, with_token, tmp_path):
     transcribe_meeting(audio, settings, backend=FakeBackend(), work_dir=tmp_path)
 
     cache = cache_dir_for(audio, tmp_path)
-    assert (cache / "transcription.json").exists()
+    assert (cache / "large-v3" / "transcription.json").exists()
     assert cache.name.startswith("meeting-"), "у каждой записи своя папка"
 
-    saved = json.loads((cache / "segments.json").read_text(encoding="utf-8"))
+    saved = json.loads((cache / "large-v3" / "segments.json").read_text(encoding="utf-8"))
     assert saved["segments"][0]["speaker"] == "SPEAKER_00"
 
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
@@ -275,13 +276,19 @@ def transcribe_meeting(
     if source.suffix.lower() in VIDEO_SUFFIXES:
         title = STEP_TITLES["audio"]
         report(progress, Step(name="audio", title=title, share=0.0))
+        started = time.perf_counter()
         audio = extract_audio(
             source, cache / f"{source.stem}.wav",
             overwrite=fresh,
             start=from_second,
             duration=(to_second - (from_second or 0)) if to_second else None,
         )
-        report(progress, Step(name="audio", title=title, done=True, share=0.05))
+        # Время — настоящее: с сетевого диска звук извлекается минутами, а
+        # «0.0 с» в журнале выглядело так, будто шаг пропущен.
+        report(progress, Step(
+            name="audio", title=title, done=True, share=0.05,
+            elapsed_s=round(time.perf_counter() - started, 1),
+        ))
 
     hints_file, origin = hints_for(source, settings, meeting=meeting)
     logger.info("Подсказки распознаванию {}{}", origin, f": {hints_file}" if hints_file else "")

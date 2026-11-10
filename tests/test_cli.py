@@ -553,3 +553,20 @@ def test_the_latest_protocol_is_not_fed_back_as_a_material(
     (meeting / "последний-протокол.docx").write_bytes(b"docx")
 
     assert [path.name for path in materials_in(meeting)] == ["повестка.docx"]
+
+
+def test_print_step_shows_start_progress_and_end(capsys):
+    """В терминале это единственный признак жизни: между «Извлекаю звук» и
+    концом распознавания он молчал десятки минут."""
+    from minuteforge.cli import print_step
+    from minuteforge.progress import Step
+
+    print_step(Step(name="transcribe", title="Распознаю речь", share=0.05))
+    print_step(Step(name="transcribe", title="Распознаю речь", share=0.35, percent=50))
+    print_step(Step(name="transcribe", title="Распознаю речь", done=True, share=0.65, elapsed_s=1234.5))
+    out = capsys.readouterr().out.splitlines()
+    assert out == [
+        "  [  5%] Распознаю речь — начат",
+        "  [ 35%] Распознаю речь — 50% шага",
+        "  [ 65%] Распознаю речь — 1234.5 с",
+    ]

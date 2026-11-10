@@ -372,6 +372,11 @@ def print_step(step) -> None:
     """Ход работы строчками. В терминале это единственный признак жизни:
     распознавание часовой записи идёт десятки минут молча."""
     if not step.done:
+        # Начало шага и его ход — тоже строчкой: иначе между «Извлекаю звук»
+        # и концом распознавания терминал молчал десятки минут, и было не
+        # понять, идёт работа или всё повисло.
+        tail = f"{step.percent:.0f}% шага" if step.percent is not None else "начат"
+        print(f"  [{step.share:>4.0%}] {step.title} — {tail}", flush=True)
         return
     mark = "не считался, взят из сохранённого" if step.reused else f"{step.elapsed_s} с"
     print(f"  [{step.share:>4.0%}] {step.title} — {mark}", flush=True)

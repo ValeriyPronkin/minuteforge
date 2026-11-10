@@ -272,7 +272,11 @@ class Live:
                 self.status.write(f"{step.title} — {mark}")
             self.bar.progress(step.share, text=f"Прошло {clock}")
         else:
-            label = f"{step.title}… (идёт {clock})"
+            # Процент шага — когда шаг о нём сообщает (распознавание и
+            # выравнивание): без него полоска стояла на месте десятки минут.
+            done_part = getattr(step, "percent", None)
+            part = f", {done_part:.0f}% шага" if done_part is not None else ""
+            label = f"{step.title}… (идёт {clock}{part})"
             if self.status is not None:
                 self.status.update(label=label)
             self.bar.progress(step.share, text=label)

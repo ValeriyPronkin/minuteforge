@@ -764,3 +764,88 @@ def test_warning_on_gigaam_points_to_the_command_line():
     assert "minuteforge run --model gigaam-v3_e2e_ctc" in warning
     _, other = preselect_model("large-v2", UI_MODELS)
     assert "gigaam" not in other
+
+
+# --- Ход шага ----------------------------------------------------------------
+
+
+def test_ticker_reports_every_five_percent_with_overall_share():
+    from minuteforge.transcribe import STEP_SHARES, ticker
+
+    seen = []
+    tick = ticker(seen.append, "transcribe")
+    for percent in (0.4, 1.0, 4.9, 5.0, 7.3, 9.99, 10.0, 52.0, 100.0):
+        tick(percent)
+    assert [s.percent for s in seen] == [0, 5, 10, 50, 100]
+    assert all(s.name == "transcribe" and not s.done for s in seen)
+    before = STEP_SHARES["audio"]
+    assert seen[-1].share == pytest.approx(before + STEP_SHARES["transcribe"])
+    assert seen[3].share == pytest.approx(before + STEP_SHARES["transcribe"] * 0.52, abs=1e-3)
+
+
+def test_ticker_starts_over_when_the_step_restarts():
+    """После нехватки памяти шаг идёт заново — и его ход снова виден."""
+    from minuteforge.transcribe import ticker
+
+    seen = []
+    tick = ticker(seen.append, "transcribe")
+    for percent in (10, 40, 5, 10):
+        tick(percent)
+    assert [s.percent for s in seen] == [10, 40, 5, 10]
+
+
+def test_printed_progress_lines_become_ticks_and_the_rest_passes_through():
+    import io
+    from minuteforge.transcribe import _ProgressLines
+
+    ticks, out = [], io.StringIO()
+    lines = _ProgressLines(ticks.append, out)
+    lines.write("Progress: 12.50%...\nДетектирую речь\n")
+    lines.write("Progress: 1")
+    lines.write("3.00%...\nхвост без перевода")
+    lines.flush()
+    assert ticks == [12.5, 13.0]
+    assert out.getvalue() == "Детектирую речь\nхвост без перевода"
+
+
+def test_progress_is_asked_the_way_the_whisperx_version_understands():
+    import contextlib
+    from minuteforge.transcribe import _ProgressLines, progress_kwargs
+
+    def new(audio, batch_size=8, progress_callback=None): ...
+    def old(audio, batch_size=8, print_progress=False): ...
+    def ancient(audio, batch_size=8): ...
+
+    tick = lambda p: None  # noqa: E731
+    extra, output = progress_kwargs(new, tick)
+    assert extra == {"progress_callback": tick}
+    extra, output = progress_kwargs(old, tick)
+    assert extra == {"print_progress": True}
+    assert isinstance(output, contextlib.redirect_stdout)
+    assert isinstance(output._new_target, _ProgressLines)
+    assert progress_kwargs(ancient, tick)[0] == {}
+    assert progress_kwargs(new, None)[0] == {}, "некому сообщать — и просить незачем"
+
+
+def test_backend_that_tells_its_progress_is_heard(audio, with_token):
+    """Ход распознавания доходит до того, кто показывает прогресс, — с
+    процентом шага, между началом шага и его концом."""
+
+    class Telling(FakeBackend):
+        on_progress = None
+
+        def transcribe(self, *a, **k):
+            for percent in (25, 50, 100):
+                self.on_progress(percent)
+            return super().transcribe(*a, **k)
+
+    seen = []
+    recognize(audio, Settings(device="cpu"), backend=Telling(), progress=seen.append)
+    steps = [(s.name, s.done, s.percent) for s in seen if s.name == "transcribe"]
+    assert steps == [
+        ("transcribe", False, None),
+        ("transcribe", False, 25),
+        ("transcribe", False, 50),
+        ("transcribe", False, 100),
+        ("transcribe", True, None),
+    ]

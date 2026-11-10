@@ -13,10 +13,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import gc
+import inspect
+import io
 import json
 import os
 import re
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -419,6 +423,11 @@ def recognize(
         logger.info("Выравнивание и разметка голосов пойдут на {}", helper)
 
     logger.info("Распознавание: модель {}, устройство {}", settings.asr_model, device)
+    # Ход шага — тому бэкенду, что умеет о нём рассказать. Атрибутом, а не
+    # аргументом: протокол Backend от этого не меняется, заглушки тоже.
+    tells = hasattr(backend, "on_progress")
+    if tells:
+        backend.on_progress = ticker(progress, "transcribe")
     raw = _step(
         cache, "transcription.json", result, progress, "transcribe",
         lambda: _signed(_transcribe_with_fallback(backend, str(audio), settings, device, result), result),
@@ -440,6 +449,8 @@ def recognize(
                 result.fallbacks.append(note)
     result.language = raw.get("language") or settings.language
 
+    if tells:
+        backend.on_progress = ticker(progress, "align")
     aligned = _step(
         cache, "aligned.json", result, progress, "align",
         lambda: backend.align(
@@ -454,6 +465,8 @@ def recognize(
         result.segments = aligned.get("segments", [])
         return result
 
+    if tells:
+        backend.on_progress = ticker(progress, "diarize")
     assigned = _step(
         cache, "segments.json", result, progress, "diarize",
         lambda: backend.diarize(
@@ -652,6 +665,88 @@ def _step(
         share=_share_after(key),
     ))
     return value
+
+
+#: Шаг хода, о котором стоит сообщать: чаще — шум в журнале, реже — снова
+#: долгие минуты молчания.
+TICK_PERCENT = 5
+
+
+def ticker(progress: Progress | None, key: str) -> Callable[[float], None]:
+    """Принимает проценты шага (0–100) и сообщает их, не чаще чем раз в
+    :data:`TICK_PERCENT`. Доля всей работы считается по :data:`STEP_SHARES`.
+
+    Повторная попытка после нехватки памяти начинает шаг с нуля — счёт
+    тогда тоже начинается заново, иначе её ход был бы не виден.
+    """
+    last = [-1.0]
+
+    def tick(percent: float) -> None:
+        percent = max(0.0, min(100.0, float(percent)))
+        mark = percent // TICK_PERCENT * TICK_PERCENT
+        if mark < last[0]:
+            last[0] = -1.0
+        if mark <= last[0]:
+            return
+        last[0] = mark
+        share = _share_before(key) + STEP_SHARES.get(key, 0.0) * percent / 100
+        report(progress, Step(
+            name=key, title=STEP_TITLES.get(key, key), share=round(share, 3), percent=mark,
+        ))
+
+    return tick
+
+
+_PROGRESS_LINE = re.compile(r"^\s*Progress:\s*([\d.]+)%")
+
+
+class _ProgressLines(io.TextIOBase):
+    """Вывод, из которого строки «Progress: 42.00%...» уходят в ``tick``.
+
+    Старые whisperx сообщают о ходе только печатью — по строке на каждый
+    кусок записи, сотни строк на часовое совещание. Их перехватываем и
+    сообщаем по-своему, реже; всё остальное идёт дальше, куда шло.
+    """
+
+    def __init__(self, tick: Callable[[float], None], through):
+        self.tick, self.through, self.rest = tick, through, ""
+
+    def write(self, text: str) -> int:
+        self.rest += text
+        *lines, self.rest = self.rest.split("\n")
+        for line in lines:
+            found = _PROGRESS_LINE.match(line)
+            if found:
+                self.tick(float(found.group(1)))
+            else:
+                self.through.write(line + "\n")
+        return len(text)
+
+    def flush(self) -> None:
+        if self.rest and not _PROGRESS_LINE.match(self.rest):
+            self.through.write(self.rest)
+            self.rest = ""
+        self.through.flush()
+
+
+def progress_kwargs(func: Callable, tick: Callable[[float], None] | None):
+    """Как попросить у функции whisperx её ход — по сигнатуре, а не по версии.
+
+    Возвращает (именованные аргументы, обёртка вывода). Новые whisperx (3.8.3+)
+    принимают ``progress_callback``, старые — только ``print_progress``, совсем
+    старые — ничего: тогда шаг идёт молча, как прежде.
+    """
+    if tick is None:
+        return {}, contextlib.nullcontext()
+    try:
+        params = inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return {}, contextlib.nullcontext()
+    if "progress_callback" in params:
+        return {"progress_callback": tick}, contextlib.nullcontext()
+    if "print_progress" in params:
+        return {"print_progress": True}, contextlib.redirect_stdout(_ProgressLines(tick, sys.stdout))
+    return {}, contextlib.nullcontext()
 
 
 def _share_before(key: str) -> float:
@@ -872,6 +967,9 @@ def _whisperx_backend() -> Backend:
 class _WhisperX:  # pragma: no cover — требует моделей и видеокарты
     """Тонкая обёртка: вызовы WhisperX и ничего больше."""
 
+    #: Кому сообщать ход текущего шага — ставит recognize.
+    on_progress: Callable[[float], None] | None = None
+
     def transcribe(
         self, audio: str, *, model: str, language: str, batch_size: int,
         device: str, hints: str = "",
@@ -896,8 +994,10 @@ class _WhisperX:  # pragma: no cover — требует моделей и вид
             )
             asr = whisperx.load_model(model, device, **common)
         sound = whisperx.load_audio(audio)
+        extra, output = progress_kwargs(asr.transcribe, self.on_progress)
         try:
-            return asr.transcribe(sound, batch_size=batch_size)
+            with output:
+                return asr.transcribe(sound, batch_size=batch_size, **extra)
         finally:
             # Модель больше не нужна, а следующему шагу нужна её память.
             del asr
@@ -908,13 +1008,16 @@ class _WhisperX:  # pragma: no cover — требует моделей и вид
 
         model, metadata = whisperx.load_align_model(language_code=language, device=device)
         sound = whisperx.load_audio(audio)
+        extra, output = progress_kwargs(whisperx.align, self.on_progress)
         try:
-            return align_alignable(
-                segments,
-                lambda batch: whisperx.align(
-                    batch, model, metadata, sound, device, return_char_alignments=False
-                ),
-            )
+            with output:
+                return align_alignable(
+                    segments,
+                    lambda batch: whisperx.align(
+                        batch, model, metadata, sound, device,
+                        return_char_alignments=False, **extra,
+                    ),
+                )
         finally:
             del model, metadata
             free_vram()
@@ -926,8 +1029,12 @@ class _WhisperX:  # pragma: no cover — требует моделей и вид
 
         pipeline = whisperx.diarize.DiarizationPipeline(use_auth_token=token, device=device)
         sound = whisperx.load_audio(audio)
+        extra, output = progress_kwargs(pipeline.__call__, self.on_progress)
         try:
-            diarized = pipeline(sound, min_speakers=speakers, max_speakers=speakers)
+            with output:
+                diarized = pipeline(
+                    sound, min_speakers=speakers, max_speakers=speakers, **extra
+                )
             return whisperx.assign_word_speakers(diarized, aligned)
         finally:
             del pipeline

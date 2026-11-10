@@ -141,3 +141,16 @@ def test_no_ollama_is_not_an_error(bench):
         raise OSError("connection refused")
 
     assert bench.unload_ollama("http://localhost:11434", opener=opener) == []
+
+
+@pytest.mark.parametrize("name", ["meeting.mp4", "2903kol200181270317940221100EP29102026REC.mp4"])
+def test_finds_the_same_cache_folder_as_minuteforge(bench, tmp_path, name):
+    """Скрипту дают ту же запись, что и minuteforge, — папка шагов должна
+    выйти та же, иначе GigaAM распознает в одну, а minuteforge ищет в другой."""
+    from minuteforge.pipeline import cache_dir_for
+
+    record = tmp_path / "I" / name
+    record.parent.mkdir()
+    record.write_bytes(b"video")
+    work = tmp_path / "work"
+    assert bench.cache_for_record(record, work) == cache_dir_for(record, work)

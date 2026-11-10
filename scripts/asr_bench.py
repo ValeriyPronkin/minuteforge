@@ -11,11 +11,16 @@
 minuteforge увидит готовый transcription.json в подпапке этой модели и
 распознавать не станет — только выровняет и разметит.
 
-Порядок для одной записи:
-  1. основное окружение: обычный прогон whisperX — он же извлекает звук
-     в папку шагов записи (data/work/<запись>-<отпечаток>/<запись>.wav);
-  2. окружение GigaAM:  python scripts/asr_bench.py <папка шагов записи>
-  3. основное окружение: прогон с --model gigaam-v3_e2e_ctc и gigaam-v3_e2e_rnnt.
+Порядок для одной записи (команды — из папки проекта):
+  1. основное окружение: minuteforge recognize <запись> — whisperX; он же
+     извлекает звук в папку шагов записи (data/work/<запись>-<отпечаток>/);
+  2. окружение GigaAM:  python scripts/asr_bench.py <запись>
+  3. основное окружение: minuteforge recognize <запись> --model gigaam-v3_e2e_rnnt
+     (и gigaam-v3_e2e_ctc).
+
+<запись> — везде один и тот же файл, там, где он лежит (например, на I:).
+Папку шагов скрипт находит по нему сам, тем же правилом, что minuteforge.
+Можно передать и саму папку шагов.
 
 Варианты — те, что пишут с пунктуацией и нормализацией: в пакете gigaam
 они называются ``v3_e2e_ctc`` и ``v3_e2e_rnnt``. Веса пакет берёт со своего
@@ -50,6 +55,7 @@ minuteforge увидит готовый transcription.json в подпапке �
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -70,6 +76,15 @@ _AUDIO = (".wav",)
 def model_dir(model: str) -> str:
     """Подпапка кэша для модели — то же правило, что в minuteforge.transcribe."""
     return re.sub(r"[^\w.-]+", "_", model.strip()).strip("._") or "default"
+
+
+def cache_for_record(source: Path, work_dir: Path) -> Path:
+    """Папка шагов записи — то же правило, что minuteforge.pipeline.cache_dir_for
+    для записи целиком (без отрезка). Совпадение держит тест."""
+    stat = source.stat()
+    mark = f"{source.name}|{stat.st_size}|{int(stat.st_mtime)}|0|0"
+    short = hashlib.sha1(mark.encode("utf-8")).hexdigest()[:8]
+    return work_dir / f"{source.stem}-{short}"
 
 
 def minuteforge_name(variant: str) -> str:
@@ -204,7 +219,10 @@ def main(argv=None) -> int:  # pragma: no cover — нужны gigaam и вид�
     # Консоль Windows — cp866: без этого скрипт падает на первом же тире.
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("cache", type=Path, help="папка шагов записи (data/work/<запись>-<отпечаток>)")
+    parser.add_argument("target", type=Path,
+                        help="запись (видео или звук, там, где лежит) или её папка шагов")
+    parser.add_argument("--work-dir", type=Path, default=Path("data/work"),
+                        help="work_dir из config.yaml, если он не data/work")
     parser.add_argument("--audio", type=Path, default=None,
                         help="звук, если это не .wav в папке шагов (например, исходный .wav)")
     parser.add_argument("--variant", action="append", choices=VARIANTS, default=None,
@@ -226,8 +244,20 @@ def main(argv=None) -> int:  # pragma: no cover — нужны gigaam и вид�
 
     import torch
 
-    if not args.cache.is_dir():
-        raise SystemExit(f"Нет папки шагов: {args.cache}")
+    if args.target.is_dir():
+        cache, record = args.target, None
+    elif args.target.is_file():
+        record = args.target
+        cache = cache_for_record(record, args.work_dir.resolve())
+    else:
+        raise SystemExit(f"Нет ни записи, ни папки: {args.target}")
+    if not cache.is_dir():
+        raise SystemExit(
+            f"Нет папки шагов {cache}. Сначала распознайте запись whisperX в "
+            "основном окружении (minuteforge recognize, из папки проекта) — он "
+            "извлечёт звук. Или --work-dir не тот."
+        )
+    print(f"Папка шагов: {cache}")
     if not os.getenv("HF_TOKEN"):
         print("Внимание: нет HF_TOKEN — разбиение записи не скачает "
               "pyannote/segmentation-3.0, если её нет в локальном кэше.")
@@ -241,9 +271,13 @@ def main(argv=None) -> int:  # pragma: no cover — нужны gigaam и вид�
                   "кем-то занята (nvidia-smi покажет кем). Замеры времени и памяти "
                   "с whisperX так не сравнить.")
 
-    audio = args.audio or find_audio(args.cache)
+    audio = args.audio
+    if audio is None:
+        extracted = [p for p in cache.iterdir() if p.suffix.lower() in _AUDIO]
+        # Звук извлекается только из видео; запись-звук читается как есть.
+        audio = record if not extracted and record is not None else find_audio(cache)
     for variant in args.variant or VARIANTS:
-        run(variant, audio, args.cache, device=args.device,
+        run(variant, audio, cache, device=args.device,
             batch_size=args.batch_size, force=args.force)
     return 0
 

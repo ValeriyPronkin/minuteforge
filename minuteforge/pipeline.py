@@ -51,11 +51,13 @@ from .tasks import (
     worth_showing,
 )
 from .transcribe import (
+    EXTERNAL_PREFIX,
     STEP_TITLES,
     RecognitionError,
     Backend,
     Progress,
     Step,
+    model_dir,
     recognize,
     report,
 )
@@ -191,7 +193,8 @@ def transcribe_meeting(
 
     :param progress: куда сообщать о ходе работы: часовая запись считается
         десятки минут, и человеку нужно видеть, что она считается.
-    :param fresh: считать заново, не заглядывая в сохранённые шаги.
+    :param fresh: считать заново, не заглядывая в сохранённые шаги, — шаги
+        заказанной модели. Шаги других моделей в папке записи остаются.
     :param start, end: какой кусок записи распознавать — «1:05:30» или
         секундами. Нужно чаще, чем кажется: на совещании с десятками
         подключений первый час уходит на перекличку, и распознавать его —
@@ -213,8 +216,19 @@ def transcribe_meeting(
 
     work_dir = Path(work_dir) if work_dir else source.parent
     cache = cache_dir_for(source, work_dir, start=from_second, end=to_second)
-    if fresh and cache.exists():
-        shutil.rmtree(cache)
+    if fresh:
+        # Только шаги заказанной модели. Прежде удалялась вся папка записи —
+        # и вместе с ней шаги других моделей: пересчёт large-v3 стирал
+        # расшифровки, посчитанные для сравнения (GigaAM — часы в другом
+        # окружении). Звук остаётся в папке записи, но извлекается заново.
+        steps = cache / model_dir(settings.asr_model)
+        if settings.asr_model.startswith(EXTERNAL_PREFIX):
+            # Расшифровку такой модели здесь не пересчитать — она из другого
+            # окружения. Заново считается то, что считается здесь.
+            for name in ("aligned.json", "segments.json"):
+                (steps / name).unlink(missing_ok=True)
+        else:
+            shutil.rmtree(steps, ignore_errors=True)
     cache.mkdir(parents=True, exist_ok=True)
 
     audio = source
@@ -223,6 +237,7 @@ def transcribe_meeting(
         report(progress, Step(name="audio", title=title, share=0.0))
         audio = extract_audio(
             source, cache / f"{source.stem}.wav",
+            overwrite=fresh,
             start=from_second,
             duration=(to_second - (from_second or 0)) if to_second else None,
         )

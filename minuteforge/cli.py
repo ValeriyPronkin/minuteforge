@@ -83,7 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     recognize.add_argument(
         "--fresh", action="store_true",
-        help="пересчитать с нуля, не заглядывая в сохранённые шаги",
+        help="пересчитать с нуля шаги выбранной модели; шаги других моделей остаются",
     )
     recognize.add_argument(
         "--no-diarize",

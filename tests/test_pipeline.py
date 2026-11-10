@@ -963,3 +963,52 @@ def test_the_form_suffix_is_kept(tmp_path):
     document.write_bytes(b"docx")
 
     assert keep_as_latest({"protocol": document}, meeting) == meeting / f"{LATEST_STEM}.docx"
+
+
+def test_fresh_keeps_other_models_steps(tmp_path, with_token):
+    """«Считать заново» удаляла всю папку записи — и шаги других моделей
+    вместе с ней. Расшифровка для сравнения, посчитанная в другом окружении,
+    пропадала от одной галочки при пересчёте large-v3."""
+    from minuteforge.pipeline import cache_dir_for
+
+    audio = make_audio(tmp_path, "meeting.wav")
+    work = tmp_path / "work"
+    transcribe_meeting(audio, Settings(device="cpu", asr_model="medium"),
+                       backend=FakeBackend(), work_dir=work)
+    transcribe_meeting(audio, Settings(device="cpu"), backend=FakeBackend(), work_dir=work)
+    cache = cache_dir_for(audio, work)
+    other = cache / "gigaam-v3_e2e_rnnt" / "transcription.json"
+    other.parent.mkdir()
+    other.write_text('{"segments": []}', encoding="utf-8")
+
+    backend = FakeBackend()
+    transcribe_meeting(audio, Settings(device="cpu"), backend=backend, work_dir=work, fresh=True)
+    assert backend.calls == ["transcribe", "align", "diarize"]
+    assert (cache / "medium" / "transcription.json").exists(), "шаги medium целы"
+    assert other.exists(), "расшифровка GigaAM цела"
+
+
+def test_fresh_on_external_model_keeps_its_transcription(tmp_path, with_token):
+    """Расшифровку GigaAM здесь не пересчитать — «заново» касается только
+    выравнивания и голосов."""
+    import json as _json
+
+    from minuteforge.pipeline import cache_dir_for
+    from minuteforge.transcribe import ASR_META
+
+    audio = make_audio(tmp_path, "meeting.wav")
+    work = tmp_path / "work"
+    steps = cache_dir_for(audio, work) / "gigaam-v3_e2e_ctc"
+    steps.mkdir(parents=True)
+    (steps / "transcription.json").write_text(_json.dumps({
+        "segments": [{"text": "Начнём.", "start": 0.0, "end": 2.0}], "language": "ru",
+        ASR_META: {"model": "gigaam-v3_e2e_ctc"},
+    }), encoding="utf-8")
+    settings = Settings(device="cpu", asr_model="gigaam-v3_e2e_ctc")
+    transcribe_meeting(audio, settings, backend=FakeBackend(), work_dir=work)
+
+    backend = FakeBackend()
+    transcript = transcribe_meeting(audio, settings, backend=backend, work_dir=work, fresh=True)
+    assert backend.calls == ["align", "diarize"]
+    assert (steps / "transcription.json").exists()
+    assert transcript.model == "gigaam-v3_e2e_ctc"

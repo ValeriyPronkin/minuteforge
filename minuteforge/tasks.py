@@ -1230,6 +1230,11 @@ def _fuller(task: Task, other: Task) -> bool:
     return len(task.what) > len(other.what)
 
 
+#: Сколько фрагментов подряд может не получить ответа, прежде чем разбор
+#: признает сервер лёгшим. Каждый отказ — это уже три попытки с паузами.
+FAILED_IN_ROW_LIMIT = 3
+
+
 def extract_tasks(
     chunks: Sequence[Chunk],
     client: LLMClient,
@@ -1293,6 +1298,7 @@ def extract_tasks(
             len(roster.people), len(roster.addressees),
         )
 
+    failed_in_row = 0
     for position, chunk in enumerate(chunks, 1):
         title = f"Фрагмент {chunk.index} из {chunk.total}"
         json_mode = getattr(client, "settings", None) and client.settings.llm_json_mode
@@ -1333,6 +1339,17 @@ def extract_tasks(
             logger.warning("Фрагмент {}/{} пропущен: {}", chunk.index, chunk.total, exc)
             if journal is not None:
                 journal.window(chunk, f"(запрос не удался: {exc})", 0)
+            failed_in_row += 1
+            if failed_in_row >= FAILED_IN_ROW_LIMIT:
+                # Один сбой — случайность, несколько подряд — лёгший сервер.
+                # Дальше разбор полчаса гонял бы пустые повторы и сохранял
+                # протокол без единого поручения, затирая им последний
+                # настоящий.
+                raise LLMError(
+                    f"Модель отказала на {failed_in_row} фрагментах подряд "
+                    f"(по {chunk.index} из {chunk.total}), разбор остановлен, "
+                    f"протокол не сохранён. Последняя ошибка: {exc}"
+                ) from exc
             report(progress, Step(
                 name="chunk",
                 title=f"{title} — пропущен: {exc}",
@@ -1342,6 +1359,7 @@ def extract_tasks(
             ))
             continue
 
+        failed_in_row = 0
         if answers is not None:
             answers.append(reply.text)
         parsed = parse_tasks(reply.text, chunk=chunk.index)

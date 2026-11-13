@@ -260,8 +260,19 @@ class LLMClient:
                         f"{LLM_KEY_ENV}; в файл настроек его класть нельзя."
                     )
                 if response.status_code >= 500:
-                    last_error = LLMError(f"Сервер модели вернул {response.status_code}")
-                    logger.warning("Сервер модели вернул {} (попытка {})", response.status_code, attempt)
+                    # Тело ответа — единственное место, где сервер говорит
+                    # почему: Ollama пишет туда «не хватило памяти» или «процесс
+                    # модели упал». Без него в журнале одно число, и чинить
+                    # приходится вслепую.
+                    why = _short(getattr(response, "text", ""))
+                    last_error = LLMError(
+                        f"Сервер модели вернул {response.status_code}"
+                        + (f": {why}" if why else "")
+                    )
+                    logger.warning(
+                        "Сервер модели вернул {} (попытка {}){}",
+                        response.status_code, attempt, f": {why}" if why else "",
+                    )
                     time.sleep(min(2 ** attempt, 10))
                     continue
                 if response.status_code != 200:

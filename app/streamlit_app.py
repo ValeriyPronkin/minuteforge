@@ -1630,7 +1630,15 @@ if st.button("Собрать протокол", type="primary"):
     # «runs» и выбирают папку по дате, а нужен он обычно именно свежий.
     # Поверх прежнего, в отличие от стенограммы заседания: это указатель на
     # последний расчёт, и устаревший указатель хуже отсутствующего.
-    latest = keep_as_latest(written, out_dir, meetings_dir=VKS_DIR)
+    latest = keep_as_latest(
+        written, out_dir, meetings_dir=VKS_DIR, tasks_found=len(protocol.tasks)
+    )
+    if not protocol.tasks:
+        st.warning(
+            "Поручений не найдено — `последний-протокол` в папке заседания "
+            "оставлен прежним. Пустой протокол лежит в папке прогона; причину "
+            "ищите в записке о разборе."
+        )
     if latest is not None:
         st.caption(
             f"Свежий протокол положен в `{out_dir.name}` как "

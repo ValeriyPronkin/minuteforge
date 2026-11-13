@@ -1134,3 +1134,24 @@ def test_cached_transcription_with_other_hints_is_flagged(tmp_path, with_token):
     assert "transcribe" not in backend.calls
     assert transcript.hints == "", "в реквизитах — то, с чем распознано на самом деле"
     assert any("другими подсказками" in note for note in transcript.notes)
+
+
+def test_an_empty_protocol_does_not_replace_the_latest(tmp_path):
+    """Шапка без поручений — почти всегда сбой модели. Затирать ею последний
+    настоящий расчёт нельзя: он нужнее."""
+    from minuteforge.pipeline import LATEST_STEM, keep_as_latest
+
+    meeting = tmp_path / "2026-10-01"
+    (meeting / "secretary").mkdir(parents=True)
+    good = meeting / "runs" / "1" / "1_протокол.md"
+    good.parent.mkdir(parents=True)
+    good.write_text("настоящий расчёт", encoding="utf-8")
+    keep_as_latest({"protocol": good}, meeting, tasks_found=5)
+
+    empty = meeting / "runs" / "2" / "2_протокол.md"
+    empty.parent.mkdir(parents=True)
+    empty.write_text("одна шапка", encoding="utf-8")
+    assert keep_as_latest({"protocol": empty}, meeting, tasks_found=0) is None
+
+    assert (meeting / f"{LATEST_STEM}.md").read_text(encoding="utf-8") == "настоящий расчёт"
+    assert empty.exists()

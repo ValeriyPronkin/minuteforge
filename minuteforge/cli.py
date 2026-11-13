@@ -28,13 +28,14 @@ from .blocks import Transcript, blocks_from_segments, consolidate
 from .checks import suspicious
 from .config import HF_TOKEN_ENV, Settings
 from .journal import setup_file_log
-from .llm import LLMClient, free_the_card
+from .llm import LLMClient, LLMError, free_the_card
 from .audio import AudioError, ffmpeg_available
 from .meetings import meeting_for, runs_root
 from .people import merge_suggestions, mentioned_people, read_people
 from .pipeline import (
     Meeting,
     check_writable,
+    LATEST_STEM,
     keep_as_latest,
     lay_out_transcript,
     models_tag,
@@ -383,15 +384,23 @@ def print_step(step) -> None:
 
 
 
-def _say_latest(written: dict, out: Path, settings: Settings) -> None:
+def _say_latest(
+    written: dict, out: Path, settings: Settings, tasks_found: int | None = None
+) -> None:
     """Свежий протокол в корень папки заседания — и сказать об этом.
 
     Иначе за ним ходят в «runs» и выбирают папку по дате, а нужен он обычно
     именно свежий.
     """
     latest = keep_as_latest(
-        written, out, meetings_dir=_dir(settings.meetings_dir)
+        written, out, meetings_dir=_dir(settings.meetings_dir),
+        tasks_found=tasks_found,
     )
+    if tasks_found == 0:
+        print(
+            f"Поручений не найдено — {LATEST_STEM} в {out} оставлен прежним. "
+            "Пустой протокол лежит в папке прогона; причину ищите в записке о разборе."
+        )
     if latest is not None:
         print(
             f"Свежий протокол положен в {out} как {latest.name} — "
@@ -535,7 +544,7 @@ def command_protocol(args: argparse.Namespace) -> int:
         template=args.template or settings.form_file,
     )
     _report(protocol, written)
-    _say_latest(written, out, settings)
+    _say_latest(written, out, settings, len(protocol.tasks))
     return 0
 
 
@@ -609,7 +618,7 @@ def command_run(args: argparse.Namespace) -> int:
         template=args.template or settings.form_file,
     )
     _report(protocol, written)
-    _say_latest(written, out, settings)
+    _say_latest(written, out, settings, len(protocol.tasks))
     return 0
 
 
@@ -673,7 +682,7 @@ def main(argv: list[str] | None = None) -> int:
         # трассировки, которая тут ничего не объясняет.
         print(str(exc), file=sys.stderr)
         return 2
-    except (RecognitionError, AudioError, FileNotFoundError, ValueError) as exc:
+    except (RecognitionError, AudioError, LLMError, FileNotFoundError, ValueError) as exc:
         print(f"Ошибка: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

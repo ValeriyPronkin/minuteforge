@@ -1871,3 +1871,24 @@ def test_the_bar_is_split_between_the_stages_that_will_run():
 
     outline, checking, wording = _stage_shares(Neither())
     assert outline == 1.0 and checking == (1.0, 1.0)
+
+
+def test_server_down_stops_the_run_instead_of_saving_an_empty_protocol():
+    """Сервер лёг — несколько фрагментов подряд без ответа. Идти дальше
+    значит полчаса гонять повторы и затереть последний протокол пустым."""
+    chunks = [
+        Chunk([Block("И", f"Реплика {i}.")], index=i, total=10) for i in range(1, 11)
+    ]
+    client = FakeClient(*[LLMError("Сервер модели вернул 500")] * 10)
+    with pytest.raises(LLMError, match="подряд"):
+        extract_tasks(chunks, client)
+    assert len(client.prompts) == 3
+
+
+def test_a_failure_between_answers_does_not_count_toward_the_limit():
+    chunks = [
+        Chunk([Block("И", f"Реплика {i}.")], index=i, total=5) for i in range(1, 6)
+    ]
+    fail = LLMError("сбой")
+    client = FakeClient(fail, fail, NOTHING_FOUND, fail, fail)
+    assert extract_tasks(chunks, client) == []

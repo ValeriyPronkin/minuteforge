@@ -227,6 +227,7 @@ def transcribe_meeting(
     start: str | float | None = None,
     end: str | float | None = None,
     meeting: Path | None = None,
+    hints: bool = True,
 ) -> Transcript:
     """Из записи — стенограмма. Самый долгий шаг, и единственный с видеокартой.
 
@@ -242,6 +243,11 @@ def transcribe_meeting(
         в исходном видео.
     :param meeting: папка заседания, если она уже известна; подсказки
         распознаванию берутся из неё (см. :func:`hints_for`).
+    :param hints: брать ли подсказки вообще. Выключают их для записи, к
+        которой заготовленные не подходят: подсказка у Whisper — это
+        предыдущий текст, и на записи другого языка или другого совещания
+        она лезет в расшифровку кусками. Прежде ради одной такой записи
+        приходилось править настройки и не забывать вернуть их обратно.
     """
     settings = settings or Settings()
     source = Path(source)
@@ -273,7 +279,15 @@ def transcribe_meeting(
     cache.mkdir(parents=True, exist_ok=True)
 
     audio = source
-    if source.suffix.lower() in VIDEO_SUFFIXES:
+    # Из видео звук извлекается всегда, из звукового файла — только под
+    # отрезок. Просто так гонять по нему ffmpeg незачем: whisperx читает
+    # любой контейнер сам, а лишний проход по часовой записи это минуты и
+    # сотня мегабайт wav на диске. Но вырезать отрезок умеет только ffmpeg,
+    # и без этого «с» и «по» у звукового файла молча пропадали: распознавалась
+    # вся запись целиком, а к меткам времени всё равно прибавлялось начало
+    # отрезка — и по ним искали место, которого в записи нет.
+    trimmed = from_second is not None or to_second is not None
+    if source.suffix.lower() in VIDEO_SUFFIXES or trimmed:
         title = STEP_TITLES["audio"]
         report(progress, Step(name="audio", title=title, share=0.0))
         started = time.perf_counter()
@@ -290,7 +304,10 @@ def transcribe_meeting(
             elapsed_s=round(time.perf_counter() - started, 1),
         ))
 
-    hints_file, origin = hints_for(source, settings, meeting=meeting)
+    if hints:
+        hints_file, origin = hints_for(source, settings, meeting=meeting)
+    else:
+        hints_file, origin = None, "выключены на этот прогон"
     logger.info("Подсказки распознаванию {}{}", origin, f": {hints_file}" if hints_file else "")
     settings = replace(settings, asr_hints_file=hints_file)
 

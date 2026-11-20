@@ -78,6 +78,24 @@ def audio(tmp_path):
 
 
 @pytest.fixture
+def instead_of_ffmpeg(monkeypatch):
+    """Извлечение звука — заглушкой.
+
+    Нужна там, где проверяется не само извлечение, а то, что идёт после
+    него: отрезок вырезается ffmpeg, а его на машине с тестами может не
+    быть вовсе.
+    """
+
+    def extract(source, target=None, **kwargs):
+        path = Path(target) if target else Path(source).with_suffix(".wav")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"wav")
+        return path
+
+    monkeypatch.setattr("minuteforge.pipeline.extract_audio", extract)
+
+
+@pytest.fixture
 def with_token(monkeypatch):
     monkeypatch.setenv(HF_TOKEN_ENV, "hf_test")
 
@@ -421,7 +439,9 @@ def test_only_the_asked_part_is_extracted(tmp_path, with_token, monkeypatch):
     assert seen["duration"] == 1800
 
 
-def test_timestamps_stay_relative_to_the_whole_recording(tmp_path, with_token):
+def test_timestamps_stay_relative_to_the_whole_recording(
+    tmp_path, with_token, instead_of_ffmpeg
+):
     """По времени возвращаются к спорному месту в исходном видео: «12:30»
     должно значить 12:30 записи, а не отрезка."""
     audio = tmp_path / "meeting.wav"
@@ -434,7 +454,9 @@ def test_timestamps_stay_relative_to_the_whole_recording(tmp_path, with_token):
     assert transcript.blocks[0].start == 3600.0
 
 
-def test_different_parts_of_one_file_do_not_share_a_cache(tmp_path, with_token):
+def test_different_parts_of_one_file_do_not_share_a_cache(
+    tmp_path, with_token, instead_of_ffmpeg
+):
     """Распознав первый час, нельзя выдать его за второй только потому, что
     файл тот же."""
     audio = tmp_path / "meeting.wav"
@@ -446,6 +468,42 @@ def test_different_parts_of_one_file_do_not_share_a_cache(tmp_path, with_token):
     transcribe_meeting(audio, Settings(device="cpu"), backend=backend,
                        work_dir=tmp_path, start="1:00:00")
     assert backend.calls == ["transcribe", "align", "diarize"]
+
+
+def test_a_segment_of_an_audio_file_is_cut_too(tmp_path, with_token, monkeypatch):
+    """Вырезать отрезок умеет только ffmpeg, и звуковой файл тут не
+    исключение. Прежде «с» и «по» у него молча пропадали: распознавалась вся
+    запись, а к меткам времени всё равно прибавлялось начало отрезка — и по
+    ним искали место, которого в записи нет."""
+    audio = tmp_path / "заседание.m4a"
+    audio.write_bytes(b"m4a")
+    seen = {}
+
+    def extract(source, target=None, **kwargs):
+        seen.update(source=Path(source), start=kwargs.get("start"),
+                    duration=kwargs.get("duration"))
+        path = Path(target)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"wav")
+        return path
+
+    monkeypatch.setattr("minuteforge.pipeline.extract_audio", extract)
+    transcribe_meeting(audio, Settings(device="cpu"), backend=FakeBackend(),
+                       work_dir=tmp_path, start="1:00:00", end="1:30:00")
+    assert seen["source"] == audio
+    assert seen["start"] == 3600
+    assert seen["duration"] == 1800
+
+
+def test_whole_audio_file_still_skips_extraction(audio, with_token, monkeypatch):
+    """Без отрезка звуковой файл идёт в распознавание как есть: whisperx
+    читает любой контейнер сам, а лишний проход ffmpeg по часовой записи —
+    это минуты и сотня мегабайт wav на диске."""
+    monkeypatch.setattr(
+        "minuteforge.pipeline.extract_audio",
+        lambda *a, **k: pytest.fail("без отрезка извлекать звук незачем"),
+    )
+    transcribe_meeting(audio, Settings(device="cpu"), backend=FakeBackend())
 
 
 def test_backwards_range_is_an_error(tmp_path, with_token):
@@ -1027,7 +1085,9 @@ def test_cache_dir_is_the_same_however_the_span_is_written(tmp_path):
     assert cache_dir_for(audio, work, start="", end=None) == cache_dir_for(audio, work)
 
 
-def test_app_and_pipeline_agree_on_the_cache_dir(tmp_path, with_token):
+def test_app_and_pipeline_agree_on_the_cache_dir(
+    tmp_path, with_token, instead_of_ffmpeg
+):
     """Ровно то, что делает интерфейс: запоминает папку по строкам из полей,
     а конвейер кладёт шаги по секундам. Это должна быть одна папка."""
     from minuteforge.pipeline import cache_dir_for
@@ -1134,6 +1194,72 @@ def test_cached_transcription_with_other_hints_is_flagged(tmp_path, with_token):
     assert "transcribe" not in backend.calls
     assert transcript.hints == "", "в реквизитах — то, с чем распознано на самом деле"
     assert any("другими подсказками" in note for note in transcript.notes)
+
+
+def test_hints_can_be_switched_off_for_one_run(tmp_path, with_token):
+    """Подсказка у Whisper — предыдущий текст, и на записи не того языка она
+    лезет в расшифровку кусками. Ради одной такой записи не должно
+    приходиться править настройки и не забывать вернуть их обратно."""
+    _, record = meeting_with_record(tmp_path)
+    fallback = tmp_path / "общая.txt"
+    fallback.write_text(GLOBAL_HINT, encoding="utf-8")
+    backend = HintsBackend()
+    transcript = transcribe_meeting(
+        record, Settings(device="cpu", asr_hints_file=fallback),
+        backend=backend, work_dir=tmp_path / "work", hints=False,
+    )
+    assert backend.hints == "", "ни подсказка заседания, ни общая"
+    assert transcript.hints == ""
+
+
+def test_cached_transcription_in_another_language_is_flagged(tmp_path, with_token):
+    """Язык уходит в Whisper как есть, а в отпечаток кэша не входит: сменить
+    его в настройках и нажать «распознать» означало получить ту же
+    расшифровку на прежнем языке. Английская запись, разобранная по-русски,
+    читается как связный русский текст, и по ней не видно, что язык был не
+    тот."""
+    _, record = meeting_with_record(tmp_path, hint=None)
+    work = tmp_path / "work"
+    transcribe_meeting(record, Settings(device="cpu", language="ru"),
+                       backend=FakeBackend(), work_dir=work)
+
+    backend = FakeBackend()
+    transcript = transcribe_meeting(record, Settings(device="cpu", language="en"),
+                                    backend=backend, work_dir=work)
+    assert "transcribe" not in backend.calls
+    assert any("«ru»" in note and "«en»" in note for note in transcript.notes)
+
+
+def test_a_cache_from_before_the_language_mark_stays_quiet(tmp_path, with_token):
+    """В расшифровках, сохранённых до появления реквизита, языка нет. Это не
+    расхождение, а неизвестность, и ругаться на каждую старую расшифровку
+    приложение не должно."""
+    from minuteforge.pipeline import cache_dir_for
+    from minuteforge.transcribe import ASR_META, model_dir
+
+    _, record = meeting_with_record(tmp_path, hint=None)
+    work = tmp_path / "work"
+    transcribe_meeting(record, Settings(device="cpu", language="ru"),
+                       backend=FakeBackend(), work_dir=work)
+
+    saved = cache_dir_for(record, work) / model_dir("large-v3") / "transcription.json"
+    raw = json.loads(saved.read_text(encoding="utf-8"))
+    del raw[ASR_META]["language"]
+    saved.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    transcript = transcribe_meeting(record, Settings(device="cpu", language="en"),
+                                    backend=FakeBackend(), work_dir=work)
+    assert not any("язык" in note for note in transcript.notes)
+
+
+def test_the_same_language_passes_without_a_word(tmp_path, with_token):
+    """Повторный запуск с теми же настройками ругаться не должен."""
+    _, record = meeting_with_record(tmp_path, hint=None)
+    work = tmp_path / "work"
+    settings = Settings(device="cpu", language="ru")
+    transcribe_meeting(record, settings, backend=FakeBackend(), work_dir=work)
+    transcript = transcribe_meeting(record, settings, backend=FakeBackend(), work_dir=work)
+    assert not any("язык" in note for note in transcript.notes)
 
 
 def test_an_empty_protocol_does_not_replace_the_latest(tmp_path):

@@ -1225,22 +1225,36 @@ if source_path is not None or uploaded is not None:
         "пересчитать эту запись с нуля.",
     )
 
+    no_hints = st.checkbox(
+        "Без подсказок распознаванию",
+        help="Подсказка у Whisper — это не словарь, а предыдущий текст: "
+        "модель считает, что перед записью прозвучала эта фраза, и "
+        "продолжает в том же духе. На записи другого языка или другого "
+        "совещания заготовленная подсказка лезет в расшифровку кусками. "
+        "Отметьте — и эта запись распознается без неё, настройки менять не "
+        "придётся. Расшифровка от этого другая, поэтому отметьте заодно "
+        "«считать заново»: сохранённая сделана с подсказками.",
+    )
+
     if source_path is not None:
-        hints_file, origin = hints_for(
-            source_path, settings, meeting=_meeting_for(source_path)[0]
-        )
-        hinted = read_hints(hints_file) if hints_file else ""
-        if hinted:
-            st.caption(
-                f"Подсказки распознаванию {origin}: {len(hinted.split())} слов — "
-                f"`{hints_file}`"
-            )
+        if no_hints:
+            st.caption("Подсказки распознаванию выключены для этого прогона.")
         else:
-            st.warning(
-                f"Подсказок распознаванию нет: в папке заседания нет "
-                f"prep/{HINTS_NAME}, запасного файла в настройках тоже. Фамилии "
-                "и термины будут коверкаться чаще."
+            hints_file, origin = hints_for(
+                source_path, settings, meeting=_meeting_for(source_path)[0]
             )
+            hinted = read_hints(hints_file) if hints_file else ""
+            if hinted:
+                st.caption(
+                    f"Подсказки распознаванию {origin}: {len(hinted.split())} слов — "
+                    f"`{hints_file}`"
+                )
+            else:
+                st.warning(
+                    f"Подсказок распознаванию нет: в папке заседания нет "
+                    f"prep/{HINTS_NAME}, запасного файла в настройках тоже. Фамилии "
+                    "и термины будут коверкаться чаще."
+                )
     if asr_model is None:
         st.caption("Выберите модель распознавания слева — см. предупреждение там.")
     if st.button("Распознать", type="primary", disabled=asr_model is None):
@@ -1273,6 +1287,7 @@ if source_path is not None or uploaded is not None:
                 source, settings, work_dir=WORK_DIR, progress=live, fresh=fresh,
                 start=from_time or None, end=to_time or None,
                 meeting=_meeting_for(source)[0],
+                hints=not no_hints,
             )
             live.finish("Распознавание закончено")
             st.session_state["segments"] = [
@@ -1337,7 +1352,7 @@ if transcript.hints:
     summary += f", подсказка: **{len(transcript.hints.split())} слов**"
 st.write(summary)
 for note in transcript.notes:
-    st.warning(f"Не хватило видеопамяти: {note}. Качество расшифровки будет ниже.")
+    st.warning(f"Распознавание: {note}")
 doubtful = suspicious(transcript.blocks, transcript.hints)
 if doubtful:
     # Не прячем за галочкой и не выбрасываем: выдумка распознавания читается

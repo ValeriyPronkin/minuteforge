@@ -157,6 +157,14 @@ class Recognition:
     #: расшифровка с подсказками — другая расшифровка, и сравнивать её с
     #: прежней можно, только зная об этом.
     hints: str = ""
+    #: На каком языке распознавали — том, что заказан настройкой, а не том,
+    #: что модель определила сама. Реквизит наравне с подсказками: язык
+    #: уходит в Whisper как есть, и английская запись, распознанная
+    #: по-русски, выходит набором похоже звучащих русских слов.
+    #: ``None`` значит «неизвестно»: так выглядят расшифровки, сохранённые
+    #: до появления этого реквизита. Пустая строка — другое дело, это
+    #: «язык определяла сама модель».
+    asked_language: str | None = None
 
 
 #: Под каким ключом в ``transcription.json`` лежат реквизиты распознавания.
@@ -447,6 +455,24 @@ def recognize(
                 )
                 logger.warning(note)
                 result.fallbacks.append(note)
+            if (
+                result.asked_language is not None
+                and result.asked_language != settings.language
+            ):
+                # Язык в отпечаток кэша тоже не входит, а в Whisper он идёт
+                # как есть: сменить его в настройках и нажать «распознать»
+                # означало получить ту же расшифровку на прежнем языке —
+                # молча, за секунду и с полной уверенностью. Английская
+                # запись, распознанная по-русски, выглядит как связный
+                # русский текст, и по ней не видно, что язык был не тот.
+                note = (
+                    "расшифровка взята из сохранённой и сделана на языке "
+                    f"«{_language_name(result.asked_language)}», а сейчас "
+                    f"задан «{_language_name(settings.language)}»; чтобы "
+                    "распознать на нынешнем — «считать заново»"
+                )
+                logger.warning(note)
+                result.fallbacks.append(note)
     result.language = raw.get("language") or settings.language
 
     if tells:
@@ -482,14 +508,25 @@ def recognize(
     return result
 
 
+def _language_name(code: str | None) -> str:
+    """Как назвать язык в сообщении человеку.
+
+    Пустая настройка языка значит не «никакой», а «пусть определит модель», и
+    в сообщении о расхождении это надо назвать словами: иначе оно выглядит
+    так, будто язык потерялся.
+    """
+    return code or "определить сам"
+
+
 def _signed(raw: dict, result: Recognition) -> dict:
-    """Расшифровка с реквизитами: кем, какой порцией, с какими подсказками."""
+    """Расшифровка с реквизитами: кем, какой порцией, на каком языке, с какими подсказками."""
     return {
         **raw,
         ASR_META: {
             "model": result.asr_model,
             "batch_size": result.batch_size,
             "hints": result.hints,
+            "language": result.asked_language,
             "fallbacks": list(result.fallbacks),
         },
     }
@@ -506,6 +543,12 @@ def _restore_signature(raw: dict, result: Recognition) -> None:
     result.asr_model = str(meta.get("model") or "")
     result.batch_size = int(meta.get("batch_size") or 0)
     result.hints = str(meta.get("hints") or "")
+    # Ключа нет — расшифровка из кэша прежних версий, и язык её неизвестен.
+    # Пустая строка тут не годится: она означает «язык определяла модель», и
+    # проверка на расхождение ругалась бы на каждую старую расшифровку.
+    result.asked_language = (
+        str(meta.get("language") or "") if "language" in meta else None
+    )
     result.fallbacks = [str(n) for n in meta.get("fallbacks") or []]
 
 
@@ -531,6 +574,7 @@ def _transcribe_with_fallback(
     ladder = _ladder_from(settings.asr_model)
     last_error: BaseException | None = None
     result.hints = read_hints(settings.asr_hints_file)
+    result.asked_language = settings.language
 
     for model in ladder:
         batch = max(1, settings.batch_size)
@@ -551,7 +595,7 @@ def _transcribe_with_fallback(
                 free_vram()
                 if batch > 1:
                     batch = max(1, batch // 2)
-                    note = f"порция уменьшена до {batch}"
+                    note = f"не хватило видеопамяти, порция уменьшена до {batch}"
                     memory = vram_left()
                     if memory is not None:
                         note = f"{note} (свободно {memory[0]:.1f} ГБ из {memory[1]:.1f})"
@@ -564,7 +608,7 @@ def _transcribe_with_fallback(
                         # на записи 27.08 из неё пропал двухминутный доклад,
                         # то есть целый пункт протокола.
                         note = f"{note}. {FREE_THE_MEMORY}"
-                    logger.warning("Не хватило видеопамяти: {}", note)
+                    logger.warning(note)
                     result.fallbacks.append(note)
                     continue
                 # Переход говорится здесь, а не после успеха: между отказом на

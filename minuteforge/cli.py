@@ -82,6 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--to", dest="end", default=None, metavar="ВРЕМЯ",
         help="и до этого; пусто — до конца записи",
     )
+    _add_no_hints(recognize)
     recognize.add_argument(
         "--fresh", action="store_true",
         help="пересчитать с нуля шаги выбранной модели; шаги других моделей остаются",
@@ -116,9 +117,24 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--model", default=None, help="модель Whisper")
     run.add_argument("--language", default=None)
     run.add_argument("--speakers", type=int, default=None)
+    _add_no_hints(run)
     _add_meeting_arguments(run)
 
     return parser
+
+
+def _add_no_hints(parser: argparse.ArgumentParser) -> None:
+    """Ключ есть у обеих команд, которые распознают.
+
+    Иначе ради одной записи другого языка пришлось бы править настройки — а
+    это ровно то, от чего ключ избавляет.
+    """
+    parser.add_argument(
+        "--no-hints", action="store_true",
+        help="распознать без подсказок: они идут в Whisper предыдущим текстом, "
+        "и на записи другого языка или другого совещания заготовленная "
+        "подсказка лезет в расшифровку кусками",
+    )
 
 
 def _add_meeting_arguments(parser: argparse.ArgumentParser) -> None:
@@ -446,7 +462,7 @@ def command_recognize(args: argparse.Namespace) -> int:
     transcript = transcribe_meeting(
         args.source, settings, work_dir=_dir(settings.work_dir),
         diarize=not args.no_diarize, progress=print_step, fresh=args.fresh,
-        start=args.start, end=args.end,
+        start=args.start, end=args.end, hints=not args.no_hints,
     )
     # Дата совещания в имени папки прогона — не украшение: проводник
     # сортирует прогоны по ней, а у recognize своего ключа --date нет. Знает
@@ -461,7 +477,7 @@ def command_recognize(args: argparse.Namespace) -> int:
     paths = laid.files
 
     for note in getattr(transcript, "notes", []):
-        print(f"  ВНИМАНИЕ: не хватило видеопамяти — {note}")
+        print(f"  ВНИМАНИЕ: {note}")
     if transcript.model:
         print(f"Распознано моделью: {transcript.model}")
     for item in suspicious(transcript.blocks, transcript.hints):
@@ -599,7 +615,7 @@ def command_run(args: argparse.Namespace) -> int:
     # Промежуточное — в рабочую папку: см. command_recognize.
     transcript = transcribe_meeting(
         args.source, settings, work_dir=_dir(settings.work_dir),
-        progress=print_step,
+        progress=print_step, hints=not args.no_hints,
     )
     laid = lay_out_transcript(
         transcript, out, args.source.stem, settings,

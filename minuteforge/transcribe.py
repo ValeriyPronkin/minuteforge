@@ -22,7 +22,7 @@ import os
 import re
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
 
@@ -1008,6 +1008,72 @@ def _whisperx_backend() -> Backend:
     return _WhisperX()
 
 
+#: Параметры, которые в журнале только мешают: сам текст подсказки (он
+#: записан рядом числом слов) и служебные списки на сотни значений.
+#: Показываются размером, а не целиком.
+_BULKY = ("initial_prompt", "prefix", "hotwords", "suppress_tokens")
+
+
+def asr_options(asr: Any) -> dict[str, Any]:
+    """Параметры распознавания, с которыми whisperx согласился работать.
+
+    Приложение задаёт из них одну — подсказку. Всё остальное whisperx берёт
+    из своих умолчаний, а они у разных версий разные, и поменять их мы можем
+    только зная, от чего отталкиваемся: на записи 19.11 расшифровка ушла в
+    петлю из 24 повторов, и спорить о порогах было не о чем — значений никто
+    не видел.
+
+    Лежат они у разных версий по-разному: то namedtuple, то обычный класс с
+    полями. Поэтому достаются по возможностям объекта, а не по версии. Не
+    нашлись — пустой словарь: журнал не должен стоить распознавания.
+    """
+    options = getattr(asr, "options", None)
+    if options is None:
+        return {}
+    if hasattr(options, "_asdict"):
+        found = dict(options._asdict())
+    elif is_dataclass(options) and not isinstance(options, type):
+        found = asdict(options)
+    elif hasattr(options, "__dict__"):
+        found = {k: v for k, v in vars(options).items() if not k.startswith("_")}
+    else:
+        return {}
+    return {name: _bulk(name, value) for name, value in found.items()}
+
+
+def _bulk(name: str, value: Any) -> Any:
+    """Громоздкое — размером, а не целиком: строку журнала читают глазами."""
+    if name not in _BULKY or not value:
+        return value
+    if isinstance(value, str):
+        return f"<{len(value.split())} слов>"
+    if isinstance(value, (list, tuple, set)):
+        return f"<{len(value)} значений>"
+    return value
+
+
+def say_asr_options(asr: Any) -> None:
+    """Пишет параметры распознавания в журнал — одной строкой, чтобы скопировать.
+
+    Вместе с ними — настройки нарезки по голосу: петли повторов случаются
+    внутри куска, и его границы к делу относятся не меньше порогов.
+    """
+    found = asr_options(asr)
+    if found:
+        logger.info(
+            "Параметры whisperx: {}",
+            ", ".join(f"{name}={found[name]!r}" for name in sorted(found)),
+        )
+    else:
+        logger.info(
+            "Параметры whisperx посмотреть не удалось: эта версия держит их "
+            "не там, где мы ищем. Распознаванию это не мешает."
+        )
+    vad = getattr(asr, "_vad_params", None) or getattr(asr, "vad_params", None)
+    if vad:
+        logger.info("Нарезка по голосу: {}", vad)
+
+
 class _WhisperX:  # pragma: no cover — требует моделей и видеокарты
     """Тонкая обёртка: вызовы WhisperX и ничего больше."""
 
@@ -1037,6 +1103,7 @@ class _WhisperX:  # pragma: no cover — требует моделей и вид
                 "будут коверкаться чаще.", exc,
             )
             asr = whisperx.load_model(model, device, **common)
+        say_asr_options(asr)
         sound = whisperx.load_audio(audio)
         extra, output = progress_kwargs(asr.transcribe, self.on_progress)
         try:

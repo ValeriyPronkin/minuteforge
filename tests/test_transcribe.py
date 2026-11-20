@@ -849,3 +849,89 @@ def test_backend_that_tells_its_progress_is_heard(audio, with_token):
         ("transcribe", False, 100),
         ("transcribe", True, None),
     ]
+
+
+# --- Параметры whisperx в журнале -------------------------------------------
+#
+# Задаём мы из них одну — подсказку, остальное whisperx берёт из своих
+# умолчаний. Держит он их у разных версий по-разному, поэтому проверяются
+# все три вида, а не тот, что стоит сейчас.
+
+
+def test_asr_options_are_read_from_a_namedtuple():
+    from collections import namedtuple
+
+    from minuteforge.transcribe import asr_options
+
+    Options = namedtuple("Options", "beam_size temperatures condition_on_previous_text")
+
+    class Pipeline:
+        options = Options(5, [0.0, 0.2], False)
+
+    assert asr_options(Pipeline()) == {
+        "beam_size": 5,
+        "temperatures": [0.0, 0.2],
+        "condition_on_previous_text": False,
+    }
+
+
+def test_asr_options_are_read_from_a_dataclass():
+    from dataclasses import dataclass
+
+    from minuteforge.transcribe import asr_options
+
+    @dataclass
+    class Options:
+        beam_size: int = 5
+        no_speech_threshold: float = 0.6
+
+    class Pipeline:
+        options = Options()
+
+    assert asr_options(Pipeline()) == {"beam_size": 5, "no_speech_threshold": 0.6}
+
+
+def test_asr_options_are_read_from_a_plain_object():
+    from minuteforge.transcribe import asr_options
+
+    class Options:
+        def __init__(self):
+            self.beam_size = 5
+            self._internal = "не наше дело"
+
+    class Pipeline:
+        options = Options()
+
+    assert asr_options(Pipeline()) == {"beam_size": 5}
+
+
+def test_bulky_options_are_shown_by_size():
+    """Подсказка в строке параметров заняла бы её целиком, а числом слов она
+    уже записана рядом. Служебные списки бывают на сотни значений."""
+    from minuteforge.transcribe import asr_options
+
+    class Options:
+        def __init__(self):
+            self.initial_prompt = "Заседание штаба. Докладывают двое."
+            self.suppress_tokens = list(range(200))
+            self.beam_size = 5
+
+    class Pipeline:
+        options = Options()
+
+    seen = asr_options(Pipeline())
+    assert seen["initial_prompt"] == "<4 слов>"
+    assert seen["suppress_tokens"] == "<200 значений>"
+    assert seen["beam_size"] == 5
+
+
+def test_options_nowhere_to_be_found_is_not_a_failure():
+    """Версия держит их не там, где мы ищем, — журнал не должен стоить
+    распознавания."""
+    from minuteforge.transcribe import asr_options, say_asr_options
+
+    class Pipeline:
+        pass
+
+    assert asr_options(Pipeline()) == {}
+    say_asr_options(Pipeline())  # не падает
